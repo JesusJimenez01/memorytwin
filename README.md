@@ -154,6 +154,8 @@ python -m memorytwin.oraculo.app
 # Abre http://localhost:7860
 ```
 
+> **Nota:** La interfaz de Gradio muestra una **vista resumida** de los episodios (tarea, resumen, tags). Internamente, el sistema almacena el **contexto completo**, incluyendo el razonamiento detallado ("thinking"), alternativas descartadas y factores de decisión, que son utilizados por el motor RAG para generar respuestas precisas.
+
 ## 📊 Observabilidad con Langfuse
 
 Para habilitar trazabilidad completa:

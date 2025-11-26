@@ -220,6 +220,25 @@ class MemoryTwinMCPServer:
                         },
                         "required": []
                     }
+                ),
+                Tool(
+                    name="get_episode",
+                    description=(
+                        "Obtiene el contenido COMPLETO de un episodio específico por su ID. "
+                        "Incluye el razonamiento completo (thinking), todas las alternativas consideradas, "
+                        "factores de decisión, contexto detallado y lecciones aprendidas. "
+                        "Usar cuando se necesite profundizar en los detalles de una decisión específica."
+                    ),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "episode_id": {
+                                "type": "string",
+                                "description": "UUID del episodio a recuperar"
+                            }
+                        },
+                        "required": ["episode_id"]
+                    }
                 )
             ]
         
@@ -241,6 +260,8 @@ class MemoryTwinMCPServer:
                     return await self._search_episodes(arguments)
                 elif name == "get_statistics":
                     return await self._get_statistics(arguments)
+                elif name == "get_episode":
+                    return await self._get_episode(arguments)
                 else:
                     return CallToolResult(
                         content=[TextContent(
@@ -381,6 +402,61 @@ class MemoryTwinMCPServer:
             content=[TextContent(
                 type="text",
                 text=json.dumps(stats, indent=2, ensure_ascii=False)
+            )]
+        )
+    
+    async def _get_episode(self, args: dict) -> CallToolResult:
+        """Obtener episodio completo por ID."""
+        episode_id = args.get("episode_id")
+        
+        if not episode_id:
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text="Error: Se requiere episode_id"
+                )],
+                isError=True
+            )
+        
+        episode = self.storage.get_episode_by_id(episode_id)
+        
+        if not episode:
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=f"No se encontró episodio con ID: {episode_id}"
+                )],
+                isError=True
+            )
+        
+        # Devolver el episodio completo con toda la información
+        full_episode = {
+            "id": str(episode.id),
+            "timestamp": episode.timestamp.isoformat(),
+            "task": episode.task,
+            "context": episode.context,
+            "reasoning_trace": {
+                "raw_thinking": episode.reasoning_trace.raw_thinking,
+                "alternatives_considered": episode.reasoning_trace.alternatives_considered,
+                "decision_factors": episode.reasoning_trace.decision_factors,
+                "confidence_level": episode.reasoning_trace.confidence_level
+            },
+            "solution": episode.solution,
+            "solution_summary": episode.solution_summary,
+            "outcome": episode.outcome,
+            "success": episode.success,
+            "episode_type": episode.episode_type.value,
+            "tags": episode.tags,
+            "files_affected": episode.files_affected,
+            "lessons_learned": episode.lessons_learned,
+            "source_assistant": episode.source_assistant,
+            "project_name": episode.project_name
+        }
+        
+        return CallToolResult(
+            content=[TextContent(
+                type="text",
+                text=json.dumps(full_episode, indent=2, ensure_ascii=False)
             )]
         )
     
