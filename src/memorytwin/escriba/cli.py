@@ -161,6 +161,126 @@ def handle_lessons(args):
         ))
 
 
+def handle_setup(args):
+    """Configurar Memory Twin en un proyecto."""
+    import json
+    import os
+    from pathlib import Path
+    
+    project_path = Path(args.path).resolve()
+    
+    if not project_path.exists():
+        console.print(f"[red]Error: El directorio no existe: {project_path}[/red]")
+        return
+    
+    # Detectar ruta de Python del entorno actual
+    python_exe = sys.executable
+    
+    # Contenido de las instrucciones para Copilot
+    instructions_content = '''# Memory Twin - Instrucciones para Agentes IA
+
+## ¿Qué es Memory Twin?
+Sistema de memoria episódica que captura el razonamiento técnico para evitar "amnesia técnica" en proyectos.
+
+## ⚡ COMPORTAMIENTO AUTOMÁTICO (IMPORTANTE)
+
+### Antes de responder cualquier pregunta técnica:
+1. **SIEMPRE** usar `query_memory` o `search_episodes` para buscar contexto relevante
+2. Si hay memorias relacionadas, incorporar ese conocimiento en la respuesta
+3. Mencionar brevemente si encontré información útil de sesiones anteriores
+
+### Consultas automáticas recomendadas:
+- Antes de sugerir una solución → buscar si ya resolvimos algo similar
+- Antes de elegir una librería/enfoque → buscar decisiones previas
+- Cuando el usuario menciona un error → buscar si lo vimos antes
+- Al empezar una nueva feature → consultar lecciones aprendidas relevantes
+
+## Herramientas MCP Disponibles
+
+### `capture_thinking` - Capturar razonamiento
+Usar cuando:
+- ✅ Se resuelve un bug no trivial
+- ✅ Se toma una decisión de arquitectura
+- ✅ Se comparan alternativas y se elige una
+- ✅ Se descubre algo inesperado (gotcha, edge case)
+- ✅ El usuario dice "guarda esto", "recuerda esto", "captura esto"
+
+NO usar cuando:
+- ❌ Cambios triviales (typos, formateo)
+- ❌ Preguntas simples sin razonamiento complejo
+- ❌ Código boilerplate sin decisiones
+
+### `query_memory` - Consultar memorias
+Usar cuando:
+- El usuario pregunta "¿por qué hicimos X?"
+- El usuario pregunta "¿cómo resolvimos algo similar?"
+- Antes de tomar una decisión importante (consultar precedentes)
+
+### `get_lessons` - Lecciones aprendidas
+Usar para:
+- Onboarding de nuevos miembros
+- Revisión antes de empezar feature similar
+- El usuario pide "¿qué hemos aprendido sobre X?"
+
+### `search_episodes` - Buscar episodios
+Usar para búsquedas específicas de temas o tecnologías.
+
+### `get_timeline` - Ver historial
+Usar para ver evolución cronológica del proyecto.
+
+## Flujo de Trabajo Recomendado
+
+### Durante desarrollo:
+1. Cuando resuelvas algo complejo → `capture_thinking` automáticamente
+2. Incluir: contexto, alternativas consideradas, decisión final, lecciones
+
+### Antes de empezar tarea:
+1. `query_memory` para ver si hay contexto relevante
+2. `get_lessons` para evitar errores pasados
+
+## Proyecto Actual
+- **Nombre del proyecto**: Usar el nombre de la carpeta del workspace
+- **Source assistant**: "copilot" para GitHub Copilot
+'''
+    
+    # Configuración MCP para VS Code
+    mcp_config = {
+        "mcpServers": {
+            "memorytwin": {
+                "command": python_exe,
+                "args": ["-m", "memorytwin.mcp_server.server"]
+            }
+        }
+    }
+    
+    # Crear directorio .github si no existe
+    github_dir = project_path / ".github"
+    github_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Crear directorio .vscode si no existe
+    vscode_dir = project_path / ".vscode"
+    vscode_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Escribir archivo de instrucciones
+    instructions_path = github_dir / "copilot-instructions.md"
+    instructions_path.write_text(instructions_content, encoding="utf-8")
+    
+    # Escribir mcp.json
+    mcp_path = vscode_dir / "mcp.json"
+    mcp_path.write_text(json.dumps(mcp_config, indent=2), encoding="utf-8")
+    
+    console.print(Panel(
+        f"[bold green]✓ Memory Twin configurado![/bold green]\n\n"
+        f"Archivos creados:\n"
+        f"  • [cyan]{instructions_path}[/cyan]\n"
+        f"  • [cyan]{mcp_path}[/cyan]\n\n"
+        f"El agente ahora capturará razonamiento automáticamente\n"
+        f"y consultará memorias previas en este proyecto.",
+        title="🧠 Setup Completado",
+        border_style="green"
+    ))
+
+
 def main():
     """Punto de entrada del CLI del Escriba."""
     parser = argparse.ArgumentParser(
@@ -248,6 +368,18 @@ def main():
         help="Filtrar por proyecto"
     )
     
+    # Comando: setup
+    setup_parser = subparsers.add_parser(
+        "setup",
+        help="Configurar Memory Twin en un proyecto (crea .github/copilot-instructions.md)"
+    )
+    setup_parser.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Ruta al proyecto (por defecto: directorio actual)"
+    )
+    
     args = parser.parse_args()
     
     if not args.command:
@@ -265,6 +397,8 @@ def main():
             handle_query(args)
         elif args.command == "lessons":
             handle_lessons(args)
+        elif args.command == "setup":
+            handle_setup(args)
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         sys.exit(1)

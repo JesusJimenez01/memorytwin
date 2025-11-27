@@ -21,7 +21,8 @@ def temp_storage():
     """Crear almacenamiento temporal para tests."""
     from memorytwin.escriba.storage import MemoryStorage
     
-    with tempfile.TemporaryDirectory() as tmpdir:
+    # Usar ignore_cleanup_errors=True para evitar errores de Windows con ChromaDB
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         chroma_path = Path(tmpdir) / "chroma"
         sqlite_path = Path(tmpdir) / "test.db"
         

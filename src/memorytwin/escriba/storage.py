@@ -357,13 +357,19 @@ class MemoryStorage:
                 ).count()
                 type_counts[episode_type.value] = count
                 
-            # Contar por asistente
+            # Contar por asistente (obtener valores únicos primero)
             assistant_counts = {}
-            for record in query.distinct(EpisodeRecord.source_assistant):
-                assistant = record.source_assistant
-                count = query.filter(
-                    EpisodeRecord.source_assistant == assistant
-                ).count()
+            assistants = session.query(EpisodeRecord.source_assistant).distinct().all()
+            for (assistant,) in assistants:
+                if project_name:
+                    count = session.query(EpisodeRecord).filter(
+                        EpisodeRecord.project_name == project_name,
+                        EpisodeRecord.source_assistant == assistant
+                    ).count()
+                else:
+                    count = session.query(EpisodeRecord).filter(
+                        EpisodeRecord.source_assistant == assistant
+                    ).count()
                 assistant_counts[assistant] = count
                 
             return {

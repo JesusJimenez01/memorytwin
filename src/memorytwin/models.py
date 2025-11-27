@@ -6,12 +6,17 @@ Define los esquemas Pydantic para episodios de memoria,
 metadatos y configuración del sistema.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
+
+
+def _utc_now() -> datetime:
+    """Obtener datetime actual en UTC."""
+    return datetime.now(timezone.utc)
 
 
 class EpisodeType(str, Enum):
@@ -61,7 +66,7 @@ class Episode(BaseModel):
     """
     
     id: UUID = Field(default_factory=uuid4)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=_utc_now)
     
     # Contexto del episodio
     task: str = Field(
@@ -128,25 +133,6 @@ class Episode(BaseModel):
         default="default",
         description="Nombre del proyecto asociado"
     )
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "task": "Implementar autenticación JWT",
-                "context": "Módulo auth/ en proyecto FastAPI, usuarios en PostgreSQL",
-                "reasoning_trace": {
-                    "raw_thinking": "Consideré usar sessions pero JWT es mejor para APIs...",
-                    "alternatives_considered": ["Sessions con Redis", "OAuth2 puro"],
-                    "decision_factors": ["Stateless", "Escalabilidad", "Mobile-friendly"],
-                    "confidence_level": 0.85
-                },
-                "solution": "from jose import jwt...",
-                "solution_summary": "JWT con PyJWT, tokens de 24h, refresh tokens",
-                "episode_type": "feature",
-                "tags": ["auth", "security", "jwt"],
-                "lessons_learned": ["Siempre validar el algoritmo del JWT"]
-            }
-        }
 
 
 class MemoryQuery(BaseModel):
@@ -221,27 +207,7 @@ class ProcessedInput(BaseModel):
         default="manual",
         description="Fuente de captura: manual, clipboard, mcp"
     )
-    captured_at: datetime = Field(default_factory=datetime.utcnow)
+    captured_at: datetime = Field(default_factory=_utc_now)
 
 
-class SystemConfig(BaseModel):
-    """Configuración del sistema Memory Twin."""
-    
-    # LLM Settings
-    llm_provider: str = Field(default="google")
-    llm_model: str = Field(default="gemini-2.0-flash")
-    llm_temperature: float = Field(default=0.3, ge=0.0, le=2.0)
-    
-    # Embedding Settings  
-    embedding_model: str = Field(default="all-MiniLM-L6-v2")
-    
-    # Database Settings
-    chroma_persist_dir: str = Field(default="./data/chroma")
-    sqlite_db_path: str = Field(default="./data/memory.db")
-    
-    # MCP Settings
-    mcp_host: str = Field(default="localhost")
-    mcp_port: int = Field(default=8765)
-    
-    # Langfuse Settings
-    langfuse_enabled: bool = Field(default=True)
+

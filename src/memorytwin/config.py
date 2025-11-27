@@ -22,12 +22,6 @@ class Settings(BaseSettings):
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     
-    # Langfuse
-    langfuse_public_key: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")
-    langfuse_secret_key: str = os.getenv("LANGFUSE_SECRET_KEY", "")
-    langfuse_host: str = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
-    langfuse_enabled: bool = bool(os.getenv("LANGFUSE_PUBLIC_KEY"))
-    
     # Database
     chroma_persist_dir: str = os.getenv("CHROMA_PERSIST_DIR", "./data/chroma")
     sqlite_db_path: str = os.getenv("SQLITE_DB_PATH", "./data/memory.db")
@@ -51,9 +45,10 @@ class Settings(BaseSettings):
     # Project
     project_root: Path = Path(__file__).parent.parent.parent.parent
     
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
+    model_config = {
+        "env_file": ".env",
+        "extra": "ignore"
+    }
 
 
 @lru_cache()

@@ -81,7 +81,7 @@ def get_storage_backend(backend_type: Optional[str] = None) -> StorageBackend:
     
     Args:
         backend_type: Tipo de backend. Si es None, se lee de configuración.
-                     Opciones: "local", "chromadb_server", "supabase"
+                     Opciones: "local", "chromadb_server"
     
     Returns:
         Instancia del backend configurado
@@ -97,10 +97,6 @@ def get_storage_backend(backend_type: Optional[str] = None) -> StorageBackend:
     elif backend == "chromadb_server":
         from memorytwin.escriba.storage_chromadb_server import ChromaDBServerStorage
         return ChromaDBServerStorage()
-    
-    elif backend == "supabase":
-        from memorytwin.escriba.storage_supabase import SupabaseStorage
-        return SupabaseStorage()
     
     else:
         raise ValueError(f"Backend de storage desconocido: {backend}")
