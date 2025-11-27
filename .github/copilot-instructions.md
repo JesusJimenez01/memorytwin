@@ -83,12 +83,17 @@ Comportamiento inteligente:
 - **Pocas memorias (<20)**: Devuelve TODO el contexto completo
 - **Muchas memorias (>=20)**: Devuelve estadísticas + 5 recientes + 5 relevantes al topic
 
+**Nota Importante:**
+Esta herramienta activa el mecanismo de **"Forgetting Curve"**. Al consultar memorias relevantes, incrementas su `access_count`, evitando que el sistema las "olvide" con el tiempo. ¡Consultar es reforzar!
+
 Parámetros:
 - `topic` (opcional): Tema para búsqueda semántica
 - `project_name` (opcional): Filtrar por proyecto
 
 ### `capture_thinking` - 🔴 CAPTURA OBLIGATORIA
 **DEBO usar esta herramienta AUTOMÁTICAMENTE después de cualquier tarea técnica.**
+
+**IMPORTANTE:** Esta es la **ÚNICA** forma de persistir conocimiento. Si no la uso, el trabajo se pierde.
 
 #### ✅ CAPTURAR SIEMPRE (sin excepción):
 - Resolví un bug o error (cualquiera, no importa si es "simple")
@@ -131,6 +136,7 @@ Parámetros:
 ### `search_episodes` - Búsqueda semántica de episodios
 Usar para búsquedas específicas de temas o tecnologías.
 Devuelve los episodios más relevantes para un término de búsqueda.
+*Nota: Los resultados consultados reciben un boost de relevancia para el futuro.*
 
 Parámetros:
 - `query` (requerido): Término de búsqueda

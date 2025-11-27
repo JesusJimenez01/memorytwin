@@ -518,7 +518,11 @@ class MemoryTwinMCPServer:
             "files_affected": episode.files_affected,
             "lessons_learned": episode.lessons_learned,
             "source_assistant": episode.source_assistant,
-            "project_name": episode.project_name
+            "project_name": episode.project_name,
+            # Campos de Forgetting Curve
+            "importance_score": episode.importance_score,
+            "access_count": episode.access_count,
+            "last_accessed": episode.last_accessed.isoformat() if episode.last_accessed else None
         }
         
         return CallToolResult(

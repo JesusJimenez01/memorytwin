@@ -150,13 +150,15 @@ class TestRAGEngine:
     async def test_query_no_results(self, mock_settings, mock_genai, mock_storage):
         """Test de query sin resultados."""
         mock_storage.search_episodes.return_value = []
+        mock_storage.search_meta_memories.return_value = []
         
         engine = RAGEngine(storage=mock_storage)
         
         result = await engine.query("¿Por qué usamos GraphQL?")
         
-        assert "No encontré episodios" in result["answer"]
+        assert "No encontré" in result["answer"]
         assert result["episodes_used"] == []
+        assert result["meta_memories_used"] == []
         assert result["context_provided"] is False
 
     @pytest.mark.asyncio
@@ -277,13 +279,15 @@ class TestOracleSystemPrompt:
         assert "Memory Twin" in ORACLE_SYSTEM_PROMPT
 
     def test_prompt_mentions_episodic_memory(self):
-        """Test que menciona memoria episódica."""
-        assert "episodios de memoria" in ORACLE_SYSTEM_PROMPT
+        """Test que menciona episodios y meta-memorias."""
+        assert "EPISODIOS" in ORACLE_SYSTEM_PROMPT
+        assert "META-MEMORIAS" in ORACLE_SYSTEM_PROMPT
 
     def test_prompt_has_instructions(self):
         """Test que tiene instrucciones."""
         assert "INSTRUCCIONES" in ORACLE_SYSTEM_PROMPT
-        assert "basándote ÚNICAMENTE" in ORACLE_SYSTEM_PROMPT
+        # Actualizado: ya no menciona "ÚNICAMENTE" porque ahora incluye meta-memorias
+        assert "Prioriza las META-MEMORIAS" in ORACLE_SYSTEM_PROMPT
 
     def test_prompt_mentions_format(self):
         """Test que menciona formato."""

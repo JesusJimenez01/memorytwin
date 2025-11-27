@@ -63,6 +63,11 @@ class Episode(BaseModel):
     
     Captura el contexto completo de una decisión técnica:
     qué se hizo, cómo se razonó y por qué.
+    
+    Incluye campos para la curva de olvido (forgetting curve):
+    - importance_score: relevancia base del episodio
+    - access_count: veces que ha sido recuperado
+    - last_accessed: última vez que fue consultado
     """
     
     id: UUID = Field(default_factory=uuid4)
@@ -132,6 +137,23 @@ class Episode(BaseModel):
     project_name: str = Field(
         default="default",
         description="Nombre del proyecto asociado"
+    )
+    
+    # Campos para Forgetting Curve (curva de olvido)
+    importance_score: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description="Relevancia base del episodio (0-1). Puede ajustarse automáticamente."
+    )
+    access_count: int = Field(
+        default=0,
+        ge=0,
+        description="Número de veces que este episodio ha sido recuperado/consultado"
+    )
+    last_accessed: Optional[datetime] = Field(
+        default=None,
+        description="Última vez que este episodio fue consultado"
     )
 
 
@@ -208,6 +230,129 @@ class ProcessedInput(BaseModel):
         description="Fuente de captura: manual, clipboard, mcp"
     )
     captured_at: datetime = Field(default_factory=_utc_now)
+
+
+class MetaMemory(BaseModel):
+    """
+    Meta-Memoria - Conocimiento consolidado de múltiples episodios.
+    
+    Representa patrones, lecciones y conocimiento emergente que
+    surge del análisis de episodios relacionados. Se genera mediante
+    clustering y síntesis con LLM.
+    
+    Ejemplo: Si hay 5 episodios sobre "manejo de errores en APIs",
+    se consolidan en una MetaMemory con el patrón común, lecciones
+    agregadas y excepciones importantes.
+    """
+    
+    id: UUID = Field(default_factory=uuid4)
+    created_at: datetime = Field(default_factory=_utc_now)
+    updated_at: datetime = Field(default_factory=_utc_now)
+    
+    # Patrón identificado
+    pattern: str = Field(
+        ...,
+        description="Patrón o tema común identificado en los episodios fuente"
+    )
+    pattern_summary: str = Field(
+        ...,
+        description="Resumen ejecutivo del patrón (1-2 oraciones)"
+    )
+    
+    # Conocimiento consolidado
+    lessons: list[str] = Field(
+        default_factory=list,
+        description="Lecciones aprendidas consolidadas de todos los episodios"
+    )
+    best_practices: list[str] = Field(
+        default_factory=list,
+        description="Mejores prácticas derivadas del patrón"
+    )
+    antipatterns: list[str] = Field(
+        default_factory=list,
+        description="Anti-patrones o errores comunes a evitar"
+    )
+    
+    # Excepciones y matices
+    exceptions: list[str] = Field(
+        default_factory=list,
+        description="Casos especiales donde el patrón no aplica"
+    )
+    edge_cases: list[str] = Field(
+        default_factory=list,
+        description="Casos límite descubiertos"
+    )
+    
+    # Contextos aplicables
+    contexts: list[str] = Field(
+        default_factory=list,
+        description="Contextos donde este conocimiento es aplicable"
+    )
+    technologies: list[str] = Field(
+        default_factory=list,
+        description="Tecnologías relacionadas (lenguajes, frameworks, libs)"
+    )
+    
+    # Trazabilidad
+    source_episode_ids: list[UUID] = Field(
+        default_factory=list,
+        description="IDs de episodios fuente que originaron esta meta-memoria"
+    )
+    episode_count: int = Field(
+        default=0,
+        ge=0,
+        description="Número de episodios consolidados"
+    )
+    
+    # Calidad y confianza
+    confidence: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Confianza en la consolidación (0-1). Mayor con más episodios."
+    )
+    coherence_score: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Qué tan coherentes son los episodios fuente entre sí"
+    )
+    
+    # Metadatos
+    project_name: str = Field(
+        default="default",
+        description="Proyecto asociado"
+    )
+    tags: list[str] = Field(
+        default_factory=list,
+        description="Etiquetas para categorización"
+    )
+    
+    # Uso y relevancia
+    access_count: int = Field(
+        default=0,
+        ge=0,
+        description="Veces que esta meta-memoria ha sido consultada"
+    )
+    last_accessed: Optional[datetime] = Field(
+        default=None,
+        description="Última consulta"
+    )
+
+
+class MetaMemorySearchResult(BaseModel):
+    """Resultado de búsqueda en meta-memorias."""
+    
+    meta_memory: MetaMemory
+    relevance_score: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Puntuación de relevancia semántica"
+    )
+    match_reason: str = Field(
+        default="",
+        description="Explicación de por qué este resultado es relevante"
+    )
 
 
 

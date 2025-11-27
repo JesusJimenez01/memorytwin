@@ -154,6 +154,12 @@ mt lessons --project mi-proyecto
 
 # Ver estadísticas
 mt stats --project mi-proyecto
+
+# Consolidar memorias (Meta-Memorias)
+mt consolidate --project mi-proyecto
+
+# Verificar salud del sistema
+mt health-check
 ```
 
 ### Onboarding de Proyectos Existentes
@@ -253,6 +259,71 @@ STORAGE_BACKEND=chromadb_server    # ChromaDB Server
 - [ ] Rate limiting configurable
 - [ ] Archivado automático de episodios antiguos
 
+## 🧠 Memoria Cognitiva Avanzada
+
+Memory Twin incluye características inspiradas en la neurociencia para simular el comportamiento de la memoria humana.
+
+### Curva de Olvido (Forgetting Curve)
+
+Inspirada en la curva de olvido de Ebbinghaus, los episodios tienen un **score híbrido** que combina:
+
+```
+final_score = semantic_score × decay × boost × importance_score
+```
+
+| Factor | Fórmula | Descripción |
+|--------|---------|-------------|
+| `semantic_score` | Similitud coseno | Relevancia semántica con la query |
+| `decay` | `exp(-0.05 × días)` | Decaimiento temporal (episodios viejos se "olvidan") |
+| `boost` | `1 + 0.1 × accesos` | Episodios consultados frecuentemente se refuerzan |
+| `importance_score` | 0.0 - 1.0 | Relevancia base del episodio |
+
+**Ejemplo práctico:**
+- Un episodio de hace 30 días tiene ~22% de "frescura" (`exp(-0.05 × 30) ≈ 0.22`)
+- Si fue consultado 10 veces, obtiene un boost de 2x (`1 + 0.1 × 10 = 2.0`)
+- Resultado: se mantiene relevante a pesar del tiempo
+
+### Meta-Memorias (Consolidación)
+
+Similar a la consolidación de la memoria durante el sueño, Memory Twin puede **consolidar episodios relacionados en meta-memorias**:
+
+```bash
+# Consolidar episodios de un proyecto
+mt consolidate --project mi-proyecto
+
+# Con más detalle
+mt consolidate --project mi-proyecto --verbose
+
+# Ajustar mínimo de episodios por cluster
+mt consolidate --project mi-proyecto --min-cluster 5
+```
+
+Una **MetaMemory** representa conocimiento consolidado:
+
+| Campo | Descripción |
+|-------|-------------|
+| `pattern` | Patrón común identificado |
+| `lessons` | Lecciones aprendidas consolidadas |
+| `best_practices` | Mejores prácticas derivadas |
+| `antipatterns` | Errores comunes a evitar |
+| `exceptions` | Casos donde el patrón no aplica |
+| `edge_cases` | Casos límite descubiertos |
+| `confidence` | Confianza en la consolidación (0-1) |
+| `source_episode_ids` | IDs de episodios fuente |
+
+**Proceso de consolidación:**
+1. **Clustering**: Agrupa episodios similares usando DBSCAN sobre embeddings
+2. **Síntesis**: Un LLM analiza el cluster y extrae patrones comunes
+3. **Almacenamiento**: La meta-memoria se guarda con trazabilidad a episodios fuente
+
+### Integración en RAG
+
+El sistema RAG prioriza las meta-memorias sobre episodios individuales:
+
+1. **Buscar en meta-memorias** (conocimiento consolidado, más confiable)
+2. **Complementar con episodios** (detalles específicos)
+3. **Combinar contexto** para generar respuesta
+
 ## 🛡️ Resiliencia y Recuperación de Errores
 
 ### Fallos de API de LLM
@@ -287,14 +358,14 @@ Memory Twin usa almacenamiento dual (ChromaDB + SQLite). Para evitar inconsisten
 ```bash
 # Verificar integridad de la base de datos
 mt health-check
-
-# Sincronizar ChromaDB con SQLite (si hay discrepancias)
-mt sync --repair
 ```
 
-**Estrategia de backup:**
+**Roadmap de mantenimiento (Próximamente):**
 
 ```bash
+# Sincronizar ChromaDB con SQLite
+mt sync --repair
+
 # Backup completo (SQLite + ChromaDB)
 mt backup --output ./backups/$(date +%Y%m%d).tar.gz
 
@@ -304,7 +375,7 @@ mt restore --input ./backups/20251127.tar.gz
 
 ### Recuperación de embeddings
 
-Si los embeddings se corrompen o cambias de modelo:
+Si los embeddings se corrompen o cambias de modelo (Próximamente):
 
 ```bash
 # Regenerar todos los embeddings desde SQLite
@@ -335,7 +406,7 @@ alembic downgrade -1
 ### Roadmap de resiliencia
 
 - [x] Retry automático con exponential backoff (LLM)
-- [ ] Comando `mt health-check` para verificar integridad
+- [x] Comando `mt health-check` para verificar integridad
 - [ ] Comando `mt backup/restore` para backups
 - [ ] Comando `mt rebuild-embeddings` para regenerar vectores
 - [ ] Transacciones atómicas SQLite + ChromaDB

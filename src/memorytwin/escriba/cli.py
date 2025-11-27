@@ -288,9 +288,82 @@ def handle_health_check(args):
                 title="📊 Estado Actual",
                 border_style="yellow"
             ))
-            
+        
     except Exception as e:
-        console.print(f"[bold red]Error durante health check:[/bold red] {e}")
+        console.print(f"[red]Error durante health check: {e}[/red]")
+        raise
+
+
+def handle_consolidate(args):
+    """Consolidar episodios relacionados en meta-memorias."""
+    from memorytwin.consolidation import MemoryConsolidator
+    from memorytwin.escriba import MemoryStorage
+    
+    console.print(Panel(
+        f"[bold cyan]🧠 Consolidando memorias del proyecto: {args.project}[/bold cyan]\n"
+        f"Mínimo episodios por cluster: {args.min_cluster}",
+        title="Memory Twin - Consolidación",
+        border_style="cyan"
+    ))
+    
+    try:
+        storage = MemoryStorage()
+        
+        # Verificar que hay suficientes episodios
+        stats = storage.get_statistics(args.project)
+        total_episodes = stats['total_episodes']
+        
+        if total_episodes < args.min_cluster:
+            console.print(
+                f"[yellow]⚠️ El proyecto solo tiene {total_episodes} episodios. "
+                f"Se necesitan al menos {args.min_cluster} para consolidar.[/yellow]"
+            )
+            return
+        
+        console.print(f"[dim]Analizando {total_episodes} episodios...[/dim]")
+        
+        # Ejecutar consolidación
+        consolidator = MemoryConsolidator(
+            storage=storage,
+            min_cluster_size=args.min_cluster
+        )
+        
+        meta_memories = consolidator.consolidate_project(args.project)
+        
+        if not meta_memories:
+            console.print(
+                "[yellow]No se encontraron clusters suficientemente grandes "
+                "para consolidar. Intenta con --min-cluster menor.[/yellow]"
+            )
+            return
+        
+        # Mostrar resultados
+        console.print(Panel(
+            f"[bold green]✓ Consolidación completada![/bold green]\n\n"
+            f"[bold]Meta-memorias generadas:[/bold] {len(meta_memories)}\n"
+            f"[bold]Episodios consolidados:[/bold] "
+            f"{sum(m.episode_count for m in meta_memories)}",
+            title="🧠 Resultado",
+            border_style="green"
+        ))
+        
+        if args.verbose:
+            for i, meta in enumerate(meta_memories, 1):
+                console.print(Panel(
+                    f"[bold]Patrón:[/bold] {meta.pattern_summary}\n\n"
+                    f"[bold]Lecciones:[/bold]\n" +
+                    "\n".join(f"  • {l}" for l in meta.lessons[:3]) + "\n\n"
+                    f"[bold]Mejores prácticas:[/bold]\n" +
+                    "\n".join(f"  • {p}" for p in meta.best_practices[:2]) + "\n\n"
+                    f"[dim]Episodios: {meta.episode_count} | "
+                    f"Confianza: {meta.confidence:.0%} | "
+                    f"Coherencia: {meta.coherence_score:.0%}[/dim]",
+                    title=f"Meta-Memoria {i}",
+                    border_style="magenta"
+                ))
+        
+    except Exception as e:
+        console.print(f"[red]Error durante consolidación: {e}[/red]")
         raise
 
 
@@ -347,6 +420,9 @@ Esta herramienta es INTELIGENTE:
 - Si hay **pocas memorias (<20)**: devuelve TODO el contexto del proyecto
 - Si hay **muchas memorias (>=20)**: devuelve estadísticas + recientes + relevantes al topic
 
+**Nota Importante:**
+Esta herramienta activa el mecanismo de **"Forgetting Curve"**. Al consultar memorias relevantes, incrementas su `access_count`, evitando que el sistema las "olvide" con el tiempo. ¡Consultar es reforzar!
+
 Ejemplos de consultas:
 - Usuario pregunta sobre autenticación → `get_project_context(topic="autenticación login JWT")`
 - Usuario tiene un error → `get_project_context(topic="error <tipo de error>")`
@@ -381,28 +457,72 @@ Comportamiento inteligente:
 - **Pocas memorias (<20)**: Devuelve TODO el contexto completo
 - **Muchas memorias (>=20)**: Devuelve estadísticas + 5 recientes + 5 relevantes al topic
 
+**Nota Importante:**
+Esta herramienta activa el mecanismo de **"Forgetting Curve"**. Al consultar memorias relevantes, incrementas su `access_count`, evitando que el sistema las "olvide" con el tiempo. ¡Consultar es reforzar!
+
 Parámetros:
 - `topic` (opcional): Tema para búsqueda semántica
 - `project_name` (opcional): Filtrar por proyecto
 
-### `capture_thinking` - Capturar razonamiento
-Usar cuando:
-- ✅ Se resuelve un bug no trivial
-- ✅ Se toma una decisión de arquitectura
-- ✅ Se comparan alternativas y se elige una
-- ✅ Se descubre algo inesperado (gotcha, edge case)
-- ✅ El usuario dice "guarda esto", "recuerda esto", "captura esto"
+### `capture_thinking` - 🔴 CAPTURA OBLIGATORIA
+**DEBO usar esta herramienta AUTOMÁTICAMENTE después de cualquier tarea técnica.**
 
-NO usar cuando:
-- ❌ Cambios triviales (typos, formateo)
-- ❌ Preguntas simples sin razonamiento complejo
-- ❌ Código boilerplate sin decisiones
+**IMPORTANTE:** Esta es la **ÚNICA** forma de persistir conocimiento. Si no la uso, el trabajo se pierde.
 
-### `query_memory` - Consultar memorias
+#### ✅ CAPTURAR SIEMPRE (sin excepción):
+- Resolví un bug o error (cualquiera, no importa si es "simple")
+- Tomé una decisión técnica (librería, patrón, enfoque)
+- Comparé alternativas antes de elegir
+- Descubrí algo inesperado (gotcha, edge case, comportamiento raro)
+- Modifiqué código existente (refactor, mejora, fix)
+- Implementé una feature nueva
+- Configuré algo (entorno, herramientas, dependencias)
+- Investigué documentación o código para entender algo
+- El usuario me pidió hacer algo y lo completé
+- Encontré un problema en documentación/código y lo corregí
+
+#### ❌ NO capturar SOLO cuando:
+- Respuesta puramente informativa sin acción (ej: "¿qué hora es?")
+- Conversación casual sin contenido técnico
+- El usuario explícitamente dice "no guardes esto"
+
+#### 🎯 REGLA DE ORO: Ante la duda, CAPTURAR
+Es mejor tener una memoria "de más" que perder conocimiento valioso.
+
+Parámetros:
+- `thinking_text` (requerido): Texto de razonamiento del modelo
+- `user_prompt` (opcional): Prompt original del usuario
+- `code_changes` (opcional): Cambios de código asociados
+- `source_assistant` (opcional): copilot, claude, cursor, etc.
+- `project_name` (opcional): Nombre del proyecto
+
+### `query_memory` - Consultar memorias con RAG
 Usar cuando:
 - El usuario pregunta "¿por qué hicimos X?"
 - El usuario pregunta "¿cómo resolvimos algo similar?"
 - Antes de tomar una decisión importante (consultar precedentes)
+
+Parámetros:
+- `question` (requerido): Pregunta a responder
+- `project_name` (opcional): Filtrar por proyecto
+- `num_episodes` (opcional): Número de episodios a consultar (1-10, default: 5)
+
+### `search_episodes` - Búsqueda semántica de episodios
+Usar para búsquedas específicas de temas o tecnologías.
+Devuelve los episodios más relevantes para un término de búsqueda.
+*Nota: Los resultados consultados reciben un boost de relevancia para el futuro.*
+
+Parámetros:
+- `query` (requerido): Término de búsqueda
+- `project_name` (opcional): Filtrar por proyecto
+- `top_k` (opcional): Número de resultados (default: 5)
+
+### `get_episode` - Obtener episodio completo
+Usar cuando necesitas profundizar en los detalles de una decisión específica.
+Devuelve el contenido COMPLETO: thinking, alternativas, factores de decisión, contexto y lecciones.
+
+Parámetros:
+- `episode_id` (requerido): UUID del episodio a recuperar
 
 ### `get_lessons` - Lecciones aprendidas
 Usar para:
@@ -410,11 +530,22 @@ Usar para:
 - Revisión antes de empezar feature similar
 - El usuario pide "¿qué hemos aprendido sobre X?"
 
-### `search_episodes` - Buscar episodios
-Usar para búsquedas específicas de temas o tecnologías.
+Parámetros:
+- `project_name` (opcional): Filtrar por proyecto
+- `tags` (opcional): Array de tags para filtrar
 
-### `get_timeline` - Ver historial
-Usar para ver evolución cronológica del proyecto.
+### `get_timeline` - Ver historial cronológico
+Usar para ver evolución cronológica del proyecto y entender qué se hizo cuándo.
+
+Parámetros:
+- `project_name` (opcional): Filtrar por proyecto
+- `limit` (opcional): Máximo de episodios a retornar (default: 20)
+
+### `get_statistics` - Estadísticas de la memoria
+Obtiene estadísticas de la base de memoria: total de episodios, distribución por tipo y asistente.
+
+Parámetros:
+- `project_name` (opcional): Filtrar por proyecto
 
 ### `onboard_project` - Onboarding de proyecto existente
 Usar cuando:
@@ -429,15 +560,73 @@ Genera automáticamente un episodio con:
 - Dependencias principales
 - Convenciones de código
 
-## Flujo de Trabajo Recomendado
+Parámetros:
+- `project_path` (requerido): Ruta absoluta al proyecto
+- `project_name` (opcional): Nombre del proyecto (se detecta automáticamente)
 
-### Durante desarrollo:
-1. Cuando resuelvas algo complejo → `capture_thinking` automáticamente
-2. Incluir: contexto, alternativas consideradas, decisión final, lecciones
+## Flujo de Trabajo OBLIGATORIO
 
-### Antes de empezar tarea:
-1. `query_memory` para ver si hay contexto relevante
-2. `get_lessons` para evitar errores pasados
+### 🔄 CICLO COMPLETO (SIEMPRE):
+```
+1. INICIO: get_project_context(topic="...") 
+2. TRABAJO: Realizar la tarea solicitada
+3. FIN: capture_thinking(thinking_text="...") 
+```
+
+### Checklist antes de terminar respuesta:
+- [ ] ¿Consulté la memoria al inicio? Si no → HACERLO AHORA
+- [ ] ¿Hice algo técnico? Si sí → CAPTURAR MEMORIA
+- [ ] ¿Resolví un problema? Si sí → CAPTURAR MEMORIA  
+- [ ] ¿Tomé una decisión? Si sí → CAPTURAR MEMORIA
+- [ ] ¿Modifiqué código? Si sí → CAPTURAR MEMORIA
+- [ ] ¿Investigué algo? Si sí → CAPTURAR MEMORIA
+
+### ⚠️ RECORDATORIO CRÍTICO:
+**NO terminar una respuesta técnica sin haber ejecutado `capture_thinking`.**
+El conocimiento que no se captura, SE PIERDE PARA SIEMPRE.
+
+## Formato del Thinking a Capturar
+
+Incluir siempre que sea posible:
+- **Tarea**: Qué se intentaba resolver
+- **Contexto**: Estado inicial, restricciones
+- **Alternativas**: Opciones consideradas
+- **Decisión**: Qué se eligió y por qué
+- **Solución**: Cómo se implementó
+- **Lecciones**: Qué aprendimos
+
+## Ejemplo de Captura Automática
+
+```
+Cuando detecto que acabo de:
+1. Debuggear un error por más de 2 intercambios
+2. Comparar 2+ opciones antes de elegir
+3. Descubrir un comportamiento inesperado
+4. Implementar algo que requirió investigación
+
+→ Llamar a capture_thinking con el contexto completo
+```
+
+## 🚨 EJEMPLO DE FLUJO CORRECTO
+
+### Usuario pregunta: "¿Por qué falla mi función de login?"
+
+```
+# 1. PRIMERO: Consultar memoria
+get_project_context(topic="login autenticación error")
+
+# 2. DESPUÉS: Trabajar en la solución
+[Analizar código, debuggear, encontrar el problema, proponer fix]
+
+# 3. FINALMENTE: Capturar el conocimiento
+capture_thinking(
+    thinking_text="## Tarea\\nResolver error en función login...\\n## Problema\\nEl token JWT...\\n## Solución\\n...\\n## Lecciones\\n...",
+    project_name="mi-proyecto",
+    source_assistant="copilot"
+)
+```
+
+**SI NO CAPTURO AL FINAL, ESTOY FALLANDO MI FUNCIÓN.**
 
 ## Proyecto Actual
 - **Nombre del proyecto**: Usar el nombre de la carpeta del workspace
@@ -608,6 +797,28 @@ def main():
         help="Verificar integridad del sistema (SQLite + ChromaDB)"
     )
     
+    # Comando: consolidate
+    consolidate_parser = subparsers.add_parser(
+        "consolidate",
+        help="Consolidar episodios relacionados en meta-memorias"
+    )
+    consolidate_parser.add_argument(
+        "--project", "-p",
+        required=True,
+        help="Nombre del proyecto a consolidar"
+    )
+    consolidate_parser.add_argument(
+        "--min-cluster", "-m",
+        type=int,
+        default=3,
+        help="Mínimo de episodios para formar un cluster (default: 3)"
+    )
+    consolidate_parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Mostrar detalles de cada meta-memoria generada"
+    )
+    
     args = parser.parse_args()
     
     if not args.command:
@@ -631,6 +842,8 @@ def main():
             handle_onboard(args)
         elif args.command == "health-check":
             handle_health_check(args)
+        elif args.command == "consolidate":
+            handle_consolidate(args)
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         sys.exit(1)
