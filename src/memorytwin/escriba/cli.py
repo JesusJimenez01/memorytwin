@@ -216,6 +216,84 @@ def handle_onboard(args):
         raise
 
 
+def handle_health_check(args):
+    """Verificar integridad del sistema Memory Twin."""
+    from memorytwin.escriba import MemoryStorage
+    from memorytwin.config import get_chroma_dir, get_sqlite_path
+    
+    console.print(Panel(
+        "[bold cyan]🔍 Verificando integridad del sistema...[/bold cyan]",
+        title="Memory Twin - Health Check",
+        border_style="cyan"
+    ))
+    
+    issues = []
+    warnings = []
+    
+    try:
+        storage = MemoryStorage()
+        stats = storage.get_statistics()
+        
+        sqlite_count = stats['total_episodes']
+        chroma_count = stats['chroma_count']
+        
+        # Verificar consistencia entre SQLite y ChromaDB
+        if sqlite_count != chroma_count:
+            issues.append(
+                f"⚠️ Inconsistencia: SQLite tiene {sqlite_count} episodios, "
+                f"ChromaDB tiene {chroma_count}"
+            )
+        
+        # Verificar archivos de base de datos
+        chroma_dir = get_chroma_dir()
+        sqlite_path = get_sqlite_path()
+        
+        if not chroma_dir.exists():
+            issues.append(f"❌ Directorio ChromaDB no existe: {chroma_dir}")
+        
+        if not sqlite_path.exists():
+            issues.append(f"❌ Archivo SQLite no existe: {sqlite_path}")
+        
+        # Verificar tamaño de base de datos
+        if sqlite_path.exists():
+            size_mb = sqlite_path.stat().st_size / (1024 * 1024)
+            if size_mb > 100:
+                warnings.append(f"📦 Base de datos grande: {size_mb:.1f} MB")
+        
+        # Resultados
+        if issues:
+            console.print("\n[bold red]❌ Problemas encontrados:[/bold red]")
+            for issue in issues:
+                console.print(f"  {issue}")
+        
+        if warnings:
+            console.print("\n[bold yellow]⚠️ Advertencias:[/bold yellow]")
+            for warning in warnings:
+                console.print(f"  {warning}")
+        
+        if not issues and not warnings:
+            console.print(Panel(
+                f"[bold green]✓ Sistema saludable[/bold green]\n\n"
+                f"[bold]Episodios en SQLite:[/bold] {sqlite_count}\n"
+                f"[bold]Episodios en ChromaDB:[/bold] {chroma_count}\n"
+                f"[bold]Sincronización:[/bold] ✓ OK",
+                title="✅ Health Check Passed",
+                border_style="green"
+            ))
+        else:
+            console.print(Panel(
+                f"[bold]Episodios en SQLite:[/bold] {sqlite_count}\n"
+                f"[bold]Episodios en ChromaDB:[/bold] {chroma_count}\n\n"
+                f"[dim]Usa 'mt sync --repair' para corregir inconsistencias[/dim]",
+                title="📊 Estado Actual",
+                border_style="yellow"
+            ))
+            
+    except Exception as e:
+        console.print(f"[bold red]Error durante health check:[/bold red] {e}")
+        raise
+
+
 def handle_setup(args):
     """Configurar Memory Twin en un proyecto."""
     import json
@@ -524,6 +602,12 @@ def main():
         help="Mostrar texto completo del análisis"
     )
     
+    # Comando: health-check
+    health_parser = subparsers.add_parser(
+        "health-check",
+        help="Verificar integridad del sistema (SQLite + ChromaDB)"
+    )
+    
     args = parser.parse_args()
     
     if not args.command:
@@ -545,6 +629,8 @@ def main():
             handle_setup(args)
         elif args.command == "onboard":
             handle_onboard(args)
+        elif args.command == "health-check":
+            handle_health_check(args)
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         sys.exit(1)

@@ -7,13 +7,30 @@ de "thinking" en episodios estructurados de memoria.
 """
 
 import json
+import logging
 from typing import Optional
 
 import google.generativeai as genai
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    before_sleep_log,
+)
 
 from memorytwin.config import get_settings
 from memorytwin.models import Episode, EpisodeType, ProcessedInput, ReasoningTrace
+
+
+# Configurar logging
+logger = logging.getLogger("memorytwin.processor")
+
+
+# Excepciones que merecen retry
+RETRYABLE_EXCEPTIONS = (
+    Exception,  # Temporalmente todas, refinarlo con excepciones específicas de Gemini
+)
 
 
 # Prompt del sistema para estructurar pensamientos
@@ -83,7 +100,9 @@ class ThoughtProcessor:
         
     @retry(
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10)
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
     )
     async def process_thought(
         self,

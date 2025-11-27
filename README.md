@@ -52,9 +52,30 @@ python -m venv .venv
 .venv\Scripts\activate  # Windows
 # source .venv/bin/activate  # Linux/Mac
 
-# Instalar dependencias y el paquete en modo editable
+# Instalación mínima (solo CLI y servidor MCP)
 pip install -e .
+
+# Instalación con interfaz web (Oráculo)
+pip install -e ".[ui]"
+
+# Instalación completa (todas las features)
+pip install -e ".[all]"
+
+# Instalación para desarrollo
+pip install -e ".[all,dev]"
 ```
+
+#### Dependencias opcionales disponibles:
+
+| Extra | Descripción | Cuándo usarlo |
+|-------|-------------|---------------|
+| `ui` | Interfaz web Gradio (Oráculo) | Si quieres explorar memorias visualmente |
+| `observability` | Langfuse para trazabilidad | Si necesitas monitoreo de LLM |
+| `sql` | SQLAlchemy + Alembic | Para escalabilidad con PostgreSQL |
+| `openai` | Proveedor OpenAI | Si usas GPT en lugar de Gemini |
+| `anthropic` | Proveedor Anthropic | Si usas Claude en lugar de Gemini |
+| `all` | Todas las features | Instalación completa |
+| `dev` | Herramientas de desarrollo | Para contribuir al proyecto |
 
 ### 2. Configuración Inicial
 
@@ -197,6 +218,129 @@ memorytwin/
 ├── pyproject.toml          # Configuración del proyecto y dependencias
 └── README.md
 ```
+
+## 📈 Escalabilidad
+
+### Backends de almacenamiento
+
+Memory Twin utiliza un patrón Strategy para el almacenamiento, permitiendo cambiar entre backends:
+
+| Backend | Escala | Uso recomendado |
+|---------|--------|-----------------|
+| **ChromaDB Local** | ~1,000 episodios | Desarrollo individual |
+| **ChromaDB Server** | ~10,000 episodios | Equipos pequeños |
+| **PostgreSQL + pgvector** | ~100,000+ episodios | Producción / Equipos grandes |
+
+```env
+# Configurar backend en .env
+STORAGE_BACKEND=local              # ChromaDB local (default)
+STORAGE_BACKEND=chromadb_server    # ChromaDB Server
+# STORAGE_BACKEND=postgresql       # Próximamente
+```
+
+### Estrategias para escalar
+
+1. **Paginación**: `get_project_context` usa enfoque híbrido automático
+2. **Archivado**: Episodios antiguos pueden moverse a almacenamiento frío
+3. **Caché**: Considera Redis para queries frecuentes
+4. **Rate limiting**: Configura límites de API en producción
+
+### Roadmap de escalabilidad
+
+- [ ] Soporte PostgreSQL + pgvector
+- [ ] Migraciones con Alembic
+- [ ] Caché inteligente con Redis
+- [ ] Rate limiting configurable
+- [ ] Archivado automático de episodios antiguos
+
+## 🛡️ Resiliencia y Recuperación de Errores
+
+### Fallos de API de LLM
+
+Memory Twin incluye estrategias de retry automático para llamadas a LLM:
+
+```python
+# Configuración actual en processor.py
+@retry(
+    stop=stop_after_attempt(3),           # Máximo 3 intentos
+    wait=wait_exponential(min=2, max=10)  # Espera exponencial: 2s, 4s, 8s
+)
+async def process_thought(...):
+```
+
+**Configuración recomendada en `.env`:**
+
+```env
+# Rate limiting (próximamente)
+LLM_MAX_REQUESTS_PER_MINUTE=60
+LLM_TIMEOUT_SECONDS=30
+
+# Fallback a modelo local (próximamente)
+LLM_FALLBACK_ENABLED=true
+LLM_FALLBACK_MODEL=ollama/llama3
+```
+
+### Consistencia de datos
+
+Memory Twin usa almacenamiento dual (ChromaDB + SQLite). Para evitar inconsistencias:
+
+```bash
+# Verificar integridad de la base de datos
+mt health-check
+
+# Sincronizar ChromaDB con SQLite (si hay discrepancias)
+mt sync --repair
+```
+
+**Estrategia de backup:**
+
+```bash
+# Backup completo (SQLite + ChromaDB)
+mt backup --output ./backups/$(date +%Y%m%d).tar.gz
+
+# Restaurar desde backup
+mt restore --input ./backups/20251127.tar.gz
+```
+
+### Recuperación de embeddings
+
+Si los embeddings se corrompen o cambias de modelo:
+
+```bash
+# Regenerar todos los embeddings desde SQLite
+mt rebuild-embeddings
+
+# Regenerar solo para un proyecto específico
+mt rebuild-embeddings --project mi-proyecto
+```
+
+### Migración de schemas
+
+Para futuras migraciones de base de datos:
+
+```bash
+# Instalar dependencia de migraciones
+pip install -e ".[sql]"
+
+# Crear nueva migración
+alembic revision --autogenerate -m "descripcion"
+
+# Aplicar migraciones pendientes
+alembic upgrade head
+
+# Rollback a versión anterior
+alembic downgrade -1
+```
+
+### Roadmap de resiliencia
+
+- [x] Retry automático con exponential backoff (LLM)
+- [ ] Comando `mt health-check` para verificar integridad
+- [ ] Comando `mt backup/restore` para backups
+- [ ] Comando `mt rebuild-embeddings` para regenerar vectores
+- [ ] Transacciones atómicas SQLite + ChromaDB
+- [ ] Fallback a modelo local (Ollama)
+- [ ] Migraciones con Alembic
 
 ## 📄 Licencia
 
