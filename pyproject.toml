@@ -70,6 +70,7 @@ all = [
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
 ]
@@ -86,3 +87,28 @@ target-version = ['py310']
 [tool.ruff]
 line-length = 100
 select = ["E", "F", "I", "N", "W"]
+
+[tool.coverage.run]
+source = ["src/memorytwin"]
+omit = [
+    "src/memorytwin/escriba/cli.py",
+    "src/memorytwin/oraculo/app.py",
+    "src/memorytwin/escriba/project_analyzer.py",
+    "src/memorytwin/escriba/storage_chromadb_server.py",
+    "src/memorytwin/escriba/storage_interface.py",
+    "src/memorytwin/observability.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
+fail_under = 60
+show_missing = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-v --tb=short"
