@@ -8,7 +8,7 @@ Gestiona el almacenamiento dual:
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from uuid import UUID
@@ -40,7 +40,7 @@ class EpisodeRecord(Base):
     __tablename__ = "episodes"
     
     id = Column(String(36), primary_key=True)
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     
     task = Column(Text, nullable=False)
     context = Column(Text, nullable=False)

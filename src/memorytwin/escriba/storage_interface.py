@@ -88,15 +88,16 @@ def get_storage_backend(backend_type: Optional[str] = None) -> StorageBackend:
     """
     import os
     
-    backend = backend_type or os.getenv("MEMORYTWIN_STORAGE_BACKEND", "local")
+    backend = backend_type or os.getenv("STORAGE_BACKEND", "local")
     
     if backend == "local":
         from memorytwin.escriba.storage import MemoryStorage
         return MemoryStorage()
-    
     elif backend == "chromadb_server":
         from memorytwin.escriba.storage_chromadb_server import ChromaDBServerStorage
         return ChromaDBServerStorage()
-    
     else:
-        raise ValueError(f"Backend de storage desconocido: {backend}")
+        raise ValueError(
+            f"Backend de storage desconocido: '{backend}'. "
+            f"Opciones válidas: 'local', 'chromadb_server'"
+        )

@@ -6,7 +6,7 @@ Coordina el procesamiento y almacenamiento de episodios
 de memoria técnica.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from rich.console import Console
@@ -86,7 +86,7 @@ class Escriba:
             user_prompt=user_prompt,
             code_changes=code_changes,
             source="api",
-            captured_at=datetime.utcnow()
+            captured_at=datetime.now(timezone.utc)
         )
         
         # Procesar con LLM

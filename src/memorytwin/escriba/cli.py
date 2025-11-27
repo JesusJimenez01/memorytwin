@@ -161,6 +161,61 @@ def handle_lessons(args):
         ))
 
 
+def handle_onboard(args):
+    """Ejecutar onboarding de un proyecto existente."""
+    import asyncio
+    from pathlib import Path
+    from memorytwin.escriba.project_analyzer import ProjectAnalyzer, onboard_project
+    
+    project_path = Path(args.path).resolve()
+    
+    if not project_path.exists():
+        console.print(f"[red]Error: El directorio no existe: {project_path}[/red]")
+        return
+    
+    console.print(Panel(
+        f"[bold cyan]🔍 Analizando proyecto...[/bold cyan]\n"
+        f"Ruta: {project_path}",
+        title="Memory Twin - Onboarding",
+        border_style="cyan"
+    ))
+    
+    try:
+        result = asyncio.run(onboard_project(
+            project_path=str(project_path),
+            project_name=args.project,
+            source_assistant="onboarding-analyzer"
+        ))
+        
+        analysis = result['analysis']
+        
+        # Mostrar resumen
+        stack_list = ", ".join([s['technology'] for s in analysis['stack'][:5]]) or "No detectado"
+        patterns_list = ", ".join([p.get('pattern', p.get('directory', '')) for p in analysis['patterns'][:3]]) or "No detectados"
+        deps_list = ", ".join(analysis['dependencies']['main'][:8]) or "No detectadas"
+        
+        console.print(Panel(
+            f"[bold green]✓ Onboarding completado![/bold green]\n\n"
+            f"[bold]Proyecto:[/bold] {result['project_name']}\n"
+            f"[bold]Episodio:[/bold] {result['episode_id']}\n\n"
+            f"[bold]Stack detectado:[/bold]\n  {stack_list}\n\n"
+            f"[bold]Patrones:[/bold]\n  {patterns_list}\n\n"
+            f"[bold]Dependencias principales:[/bold]\n  {deps_list}\n\n"
+            f"[dim]La memoria inicial del proyecto ha sido creada.\n"
+            f"El agente ahora conoce la estructura y convenciones.[/dim]",
+            title="🧠 Análisis Completado",
+            border_style="green"
+        ))
+        
+        if args.verbose:
+            console.print("\n[bold]Texto de onboarding generado:[/bold]")
+            console.print(result['onboarding_text'])
+            
+    except Exception as e:
+        console.print(f"[red]Error durante el onboarding: {e}[/red]")
+        raise
+
+
 def handle_setup(args):
     """Configurar Memory Twin en un proyecto."""
     import json
@@ -179,23 +234,78 @@ def handle_setup(args):
     # Contenido de las instrucciones para Copilot
     instructions_content = '''# Memory Twin - Instrucciones para Agentes IA
 
+---
+## 🚨 REGLA OBLIGATORIA - LEER PRIMERO 🚨
+
+**ANTES de responder CUALQUIER pregunta técnica, DEBO ejecutar:**
+
+```
+get_project_context(topic="<términos relevantes de la pregunta del usuario>")
+```
+
+**NO HAY EXCEPCIONES.** Si no consulto la memoria primero, puedo:
+- Sugerir soluciones que ya fallaron
+- Ignorar decisiones de arquitectura previas
+- Repetir errores que ya resolvimos
+- Contradecir el estilo/convenciones del proyecto
+
+**Mi primera acción SIEMPRE es obtener contexto del proyecto. SIEMPRE.**
+
+---
+
 ## ¿Qué es Memory Twin?
 Sistema de memoria episódica que captura el razonamiento técnico para evitar "amnesia técnica" en proyectos.
 
-## ⚡ COMPORTAMIENTO AUTOMÁTICO (IMPORTANTE)
+## ⚡ PROTOCOLO DE CONSULTA OBLIGATORIO
 
-### Antes de responder cualquier pregunta técnica:
-1. **SIEMPRE** usar `query_memory` o `search_episodes` para buscar contexto relevante
-2. Si hay memorias relacionadas, incorporar ese conocimiento en la respuesta
-3. Mencionar brevemente si encontré información útil de sesiones anteriores
+### PASO 1: Obtener contexto (OBLIGATORIO)
+Antes de escribir CUALQUIER respuesta técnica:
 
-### Consultas automáticas recomendadas:
-- Antes de sugerir una solución → buscar si ya resolvimos algo similar
-- Antes de elegir una librería/enfoque → buscar decisiones previas
-- Cuando el usuario menciona un error → buscar si lo vimos antes
-- Al empezar una nueva feature → consultar lecciones aprendidas relevantes
+```
+get_project_context(topic="<palabras clave de la pregunta>")
+```
+
+Esta herramienta es INTELIGENTE:
+- Si hay **pocas memorias (<20)**: devuelve TODO el contexto del proyecto
+- Si hay **muchas memorias (>=20)**: devuelve estadísticas + recientes + relevantes al topic
+
+Ejemplos de consultas:
+- Usuario pregunta sobre autenticación → `get_project_context(topic="autenticación login JWT")`
+- Usuario tiene un error → `get_project_context(topic="error <tipo de error>")`
+- Usuario quiere implementar feature → `get_project_context(topic="<nombre feature>")`
+- Usuario pregunta arquitectura → `get_project_context(topic="arquitectura diseño")`
+
+### PASO 2: Analizar resultados
+- Si hay memorias relevantes → Incorporar ese conocimiento
+- Si no hay resultados → Proceder normalmente, pero considerar capturar después
+
+### PASO 3: Responder mencionando contexto
+- "Según memorias previas del proyecto..."
+- "No encontré decisiones previas sobre esto, procedo con..."
+- "Esto ya se resolvió anteriormente, la solución fue..."
+
+### Cuándo consultar (SIEMPRE que aplique):
+| Situación | Consulta obligatoria |
+|-----------|---------------------|
+| Pregunta técnica | `get_project_context(topic="<tema>")` |
+| Error/Bug | `get_project_context(topic="error <descripción>")` |
+| Nueva feature | `get_project_context(topic="<feature>")` + `get_lessons()` |
+| Decisión de arquitectura | `query_memory("<pregunta>")` |
+| Primera vez en proyecto | `onboard_project("<ruta>")` |
+| Elegir librería/enfoque | `get_project_context(topic="<opciones>")` |
 
 ## Herramientas MCP Disponibles
+
+### `get_project_context` - ⭐ HERRAMIENTA PRINCIPAL
+**Usar SIEMPRE antes de cualquier respuesta técnica.**
+
+Comportamiento inteligente:
+- **Pocas memorias (<20)**: Devuelve TODO el contexto completo
+- **Muchas memorias (>=20)**: Devuelve estadísticas + 5 recientes + 5 relevantes al topic
+
+Parámetros:
+- `topic` (opcional): Tema para búsqueda semántica
+- `project_name` (opcional): Filtrar por proyecto
 
 ### `capture_thinking` - Capturar razonamiento
 Usar cuando:
@@ -227,6 +337,19 @@ Usar para búsquedas específicas de temas o tecnologías.
 
 ### `get_timeline` - Ver historial
 Usar para ver evolución cronológica del proyecto.
+
+### `onboard_project` - Onboarding de proyecto existente
+Usar cuando:
+- ✅ Es la primera vez que trabajo en este proyecto
+- ✅ El usuario pide "analiza el proyecto", "conoce el código"
+- ✅ Necesito entender la estructura antes de hacer cambios grandes
+- ✅ No hay memorias previas y quiero crear contexto inicial
+
+Genera automáticamente un episodio con:
+- Stack tecnológico detectado
+- Patrones arquitectónicos
+- Dependencias principales
+- Convenciones de código
 
 ## Flujo de Trabajo Recomendado
 
@@ -380,6 +503,27 @@ def main():
         help="Ruta al proyecto (por defecto: directorio actual)"
     )
     
+    # Comando: onboard
+    onboard_parser = subparsers.add_parser(
+        "onboard",
+        help="Analizar proyecto existente y crear memoria inicial de onboarding"
+    )
+    onboard_parser.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Ruta al proyecto a analizar (por defecto: directorio actual)"
+    )
+    onboard_parser.add_argument(
+        "--project", "-p",
+        help="Nombre del proyecto (se detecta automáticamente si no se especifica)"
+    )
+    onboard_parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Mostrar texto completo del análisis"
+    )
+    
     args = parser.parse_args()
     
     if not args.command:
@@ -399,6 +543,8 @@ def main():
             handle_lessons(args)
         elif args.command == "setup":
             handle_setup(args)
+        elif args.command == "onboard":
+            handle_onboard(args)
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         sys.exit(1)

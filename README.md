@@ -97,8 +97,22 @@ STORAGE_BACKEND=local
 Gracias al comando `mt setup`, tu VS Code ya debería estar configurado.
 
 1.  **Reinicia VS Code** para que cargue la configuración de MCP.
-2.  Abre el chat de Copilot y verás disponibles las herramientas de Memory Twin (`capture_thinking`, `query_memory`, etc.).
+2.  Abre el chat de Copilot y verás disponibles las herramientas de Memory Twin.
 3.  Copilot usará automáticamente estas herramientas siguiendo las instrucciones en `.github/copilot-instructions.md`.
+
+#### Herramientas MCP Disponibles
+
+| Herramienta | Descripción |
+|-------------|-------------|
+| `get_project_context` | ⭐ **Principal**. Obtiene contexto inteligente del proyecto. Usar al inicio de cada tarea. |
+| `capture_thinking` | Captura y almacena el razonamiento de decisiones técnicas. |
+| `query_memory` | Consulta memorias usando RAG. Ej: "¿Por qué elegimos X?" |
+| `search_episodes` | Búsqueda semántica de episodios por término. |
+| `get_episode` | Obtiene el contenido completo de un episodio por ID. |
+| `get_lessons` | Obtiene lecciones aprendidas agregadas. |
+| `get_timeline` | Timeline cronológico de decisiones técnicas. |
+| `get_statistics` | Estadísticas de la base de memoria. |
+| `onboard_project` | Analiza un proyecto existente y crea un episodio inicial. |
 
 ### CLI (Línea de Comandos)
 
@@ -120,6 +134,29 @@ mt lessons --project mi-proyecto
 # Ver estadísticas
 mt stats --project mi-proyecto
 ```
+
+### Onboarding de Proyectos Existentes
+
+Si empiezas a trabajar en un proyecto que **ya existe** y no tiene historial en Memory Twin, puedes ejecutar un análisis inicial que crea una "memoria base" con la estructura, stack y convenciones del proyecto:
+
+```bash
+# Analizar el proyecto actual
+mt onboard
+
+# O especificar una ruta
+mt onboard /ruta/a/mi-proyecto
+
+# Ver el análisis completo
+mt onboard --verbose
+```
+
+Esto genera un episodio de tipo "onboarding" que incluye:
+- **Stack tecnológico** detectado (Python, Node.js, etc.)
+- **Patrones arquitectónicos** (MVC, DDD, etc.)
+- **Dependencias principales**
+- **Convenciones** de linting, testing, etc.
+
+El agente de IA puede consultar esta información para entender el proyecto desde el primer momento.
 
 ### Interfaz Web (Oráculo)
 
