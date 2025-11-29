@@ -33,6 +33,8 @@ dependencies = [
     "rich>=13.0.0",
     "httpx>=0.25.0",
     "tenacity>=8.0.0",
+    "sqlalchemy>=2.0.0",
+    "scikit-learn>=1.0.0",  # Para DBSCAN en consolidación
 ]
 
 [project.optional-dependencies]
@@ -76,6 +78,11 @@ dev = [
 ]
 
 [project.scripts]
+# Comando principal - usar 'mt' desde cualquier lugar
+mt = "memorytwin.escriba.cli:main"
+
+# Aliases alternativos
+memorytwin = "memorytwin.escriba.cli:main"
 memorytwin-escriba = "memorytwin.escriba.cli:main"
 memorytwin-oraculo = "memorytwin.oraculo.app:main"
 memorytwin-mcp = "memorytwin.mcp_server.server:main"

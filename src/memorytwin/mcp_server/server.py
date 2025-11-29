@@ -281,27 +281,115 @@ class MemoryTwinMCPServer:
                 Tool(
                     name="get_project_context",
                     description=(
-                        "Obtiene un resumen contextual INTELIGENTE de las memorias del proyecto. "
-                        "USAR ESTA HERRAMIENTA AL INICIO de cada tarea técnica. "
-                        "Comportamiento adaptativo:\n"
-                        "- Si hay POCAS memorias (<20): devuelve resumen de TODAS las memorias\n"
-                        "- Si hay MUCHAS memorias (>=20): devuelve estadísticas + memorias recientes + "
-                        "memorias relevantes al tema consultado\n"
-                        "Esto garantiza contexto completo en proyectos nuevos y eficiencia en proyectos maduros."
+                        "⭐ HERRAMIENTA PRINCIPAL - USAR SIEMPRE AL INICIO DE CADA TAREA.\n\n"
+                        "Obtiene contexto inteligente con PRIORIZACIÓN:\n"
+                        "0. ⚠️ ANTIPATTERNS: Advertencias de errores previos (si hay relevantes)\n"
+                        "1. META-MEMORIAS: Conocimiento consolidado y patrones\n"
+                        "2. EPISODIOS: Decisiones individuales relevantes\n\n"
+                        "Si hay WARNINGS de antipatterns, DEBES revisarlos antes de proceder.\n"
+                        "Usa include_reasoning=true para obtener el razonamiento completo."
                     ),
                     inputSchema={
                         "type": "object",
                         "properties": {
                             "topic": {
                                 "type": "string",
-                                "description": "Tema o palabras clave de la tarea actual (para búsqueda semántica si hay muchas memorias)"
+                                "description": "Tema o palabras clave de la tarea actual (para búsqueda semántica)"
                             },
                             "project_name": {
                                 "type": "string",
                                 "description": "Filtrar por proyecto específico (opcional)"
+                            },
+                            "include_reasoning": {
+                                "type": "boolean",
+                                "description": "Si true, incluye raw_thinking completo de episodios relevantes (más tokens pero más contexto)"
                             }
                         },
                         "required": []
+                    }
+                ),
+                Tool(
+                    name="consolidate_memories",
+                    description=(
+                        "Consolida episodios similares en META-MEMORIAS usando clustering y LLM. "
+                        "Las meta-memorias agrupan patrones recurrentes, lecciones aprendidas y mejores prácticas, "
+                        "permitiendo acceso rápido a conocimiento consolidado sin buscar en episodios individuales.\n\n"
+                        "Usar cuando:\n"
+                        "- El sistema sugiere consolidación (indicador en get_project_context)\n"
+                        "- Hay muchos episodios (>20) sin consolidar\n"
+                        "- Episodios con alto access_count indican patrones frecuentes\n\n"
+                        "Resultado: Meta-memorias con patrones, lecciones, mejores prácticas y antipatrones."
+                    ),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "project_name": {
+                                "type": "string",
+                                "description": "Nombre del proyecto a consolidar (requerido)"
+                            },
+                            "min_cluster_size": {
+                                "type": "integer",
+                                "description": "Mínimo de episodios para formar un cluster (default: 3)"
+                            }
+                        },
+                        "required": ["project_name"]
+                    }
+                ),
+                Tool(
+                    name="check_consolidation_status",
+                    description=(
+                        "Verifica si el proyecto necesita consolidación de memorias. "
+                        "Analiza episodios con alto uso (access_count) y cantidad de episodios sin consolidar. "
+                        "Útil para decidir si ejecutar consolidate_memories."
+                    ),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "project_name": {
+                                "type": "string",
+                                "description": "Nombre del proyecto a verificar (opcional)"
+                            }
+                        },
+                        "required": []
+                    }
+                ),
+                Tool(
+                    name="mark_episode",
+                    description=(
+                        "Marca un episodio con flags especiales:\n"
+                        "- is_antipattern=true: Este episodio representa un ERROR o algo que NO se debe hacer. "
+                        "Se mostrará como ADVERTENCIA en futuras consultas.\n"
+                        "- is_critical=true: Este episodio es crítico y debe priorizarse en búsquedas.\n"
+                        "- superseded_by: UUID del episodio que reemplaza a este.\n"
+                        "- deprecation_reason: Razón por la que este episodio ya no aplica.\n\n"
+                        "Usar después de descubrir que una solución previa fue incorrecta o para destacar "
+                        "decisiones importantes."
+                    ),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "episode_id": {
+                                "type": "string",
+                                "description": "UUID del episodio a marcar"
+                            },
+                            "is_antipattern": {
+                                "type": "boolean",
+                                "description": "Marcar como antipatrón (algo que NO se debe hacer)"
+                            },
+                            "is_critical": {
+                                "type": "boolean",
+                                "description": "Marcar como crítico (alta prioridad)"
+                            },
+                            "superseded_by": {
+                                "type": "string",
+                                "description": "UUID del episodio que reemplaza a este"
+                            },
+                            "deprecation_reason": {
+                                "type": "string",
+                                "description": "Razón por la que este episodio ya no aplica"
+                            }
+                        },
+                        "required": ["episode_id"]
                     }
                 )
             ]
@@ -330,6 +418,12 @@ class MemoryTwinMCPServer:
                     return await self._onboard_project(arguments)
                 elif name == "get_project_context":
                     return await self._get_project_context(arguments)
+                elif name == "consolidate_memories":
+                    return await self._consolidate_memories(arguments)
+                elif name == "check_consolidation_status":
+                    return await self._check_consolidation_status(arguments)
+                elif name == "mark_episode":
+                    return await self._mark_episode(arguments)
                 else:
                     return CallToolResult(
                         content=[TextContent(
@@ -576,12 +670,19 @@ class MemoryTwinMCPServer:
         """
         Obtiene contexto inteligente del proyecto.
         
-        Estrategia híbrida:
-        - Si hay pocas memorias (<20): devuelve TODAS
-        - Si hay muchas (>=20): devuelve estadísticas + recientes + relevantes
+        Estrategia híbrida con priorización:
+        0. PRIMERO: Buscar ANTIPATTERNS relevantes (advertencias)
+        1. Luego META-MEMORIAS (conocimiento consolidado)
+        2. Finalmente EPISODIOS individuales
+        
+        Args:
+            project_name: Filtrar por proyecto
+            topic: Tema para búsqueda semántica
+            include_reasoning: Si True, incluye raw_thinking completo (más tokens)
         """
         project_name = args.get("project_name")
         topic = args.get("topic", "")
+        include_reasoning = args.get("include_reasoning", False)
         
         THRESHOLD = 20  # Umbral para cambiar de estrategia
         
@@ -589,10 +690,15 @@ class MemoryTwinMCPServer:
         stats = self.rag_engine.get_statistics()
         total_episodes = stats.get("total_episodes", 0)
         
+        # Obtener estadísticas de meta-memorias
+        meta_stats = self.storage.get_meta_memory_statistics(project_name)
+        
         result = {
             "mode": "",
             "total_episodes": total_episodes,
-            "statistics": stats
+            "total_meta_memories": meta_stats.get("total_meta_memories", 0),
+            "statistics": stats,
+            "meta_statistics": meta_stats
         }
         
         if total_episodes == 0:
@@ -608,6 +714,107 @@ class MemoryTwinMCPServer:
                 )]
             )
         
+        # =====================================================================
+        # PRIORIDAD 0: ANTIPATTERNS (ADVERTENCIAS CRÍTICAS)
+        # Buscar episodios marcados como antipattern relevantes al topic
+        # Estos DEBEN mostrarse primero como advertencias
+        # =====================================================================
+        warnings = []
+        if topic:
+            query = MemoryQuery(
+                query=topic,
+                project_filter=project_name,
+                top_k=10
+            )
+            all_results = self.storage.search_episodes(query)
+            for r in all_results:
+                if getattr(r.episode, 'is_antipattern', False):
+                    warning = {
+                        "type": "ANTIPATTERN",
+                        "severity": "HIGH",
+                        "task": r.episode.task,
+                        "lesson": r.episode.lessons_learned[0] if r.episode.lessons_learned else "Evitar este enfoque",
+                        "relevance": f"{r.relevance_score:.0%}"
+                    }
+                    if include_reasoning:
+                        warning["reasoning"] = r.episode.reasoning_trace.raw_thinking
+                    warnings.append(warning)
+        
+        if warnings:
+            result["⚠️ WARNINGS"] = warnings
+            result["warning_note"] = (
+                "⛔ ATENCIÓN: Se encontraron antipatterns relevantes. "
+                "Revisa estas advertencias ANTES de proceder. "
+                "Si decides ignorarlas, JUSTIFICA tu decisión."
+            )
+        
+        # =====================================================================
+        # PRIORIDAD 1: META-MEMORIAS (Conocimiento Consolidado)
+        # Siempre incluir meta-memorias si existen (acceso rápido a patrones)
+        # =====================================================================
+        meta_memories_included = []
+        if meta_stats.get("total_meta_memories", 0) > 0:
+            if topic:
+                # Búsqueda semántica en meta-memorias
+                meta_results = self.storage.search_meta_memories(
+                    query=topic,
+                    project_name=project_name,
+                    top_k=3
+                )
+                meta_memories_included = [
+                    {
+                        "id": str(r.meta_memory.id),
+                        "pattern": r.meta_memory.pattern_summary,
+                        "lessons": r.meta_memory.lessons[:3],
+                        "best_practices": r.meta_memory.best_practices[:2],
+                        "technologies": r.meta_memory.technologies,
+                        "episode_count": r.meta_memory.episode_count,
+                        "confidence": f"{r.meta_memory.confidence:.0%}",
+                        "relevance": f"{r.relevance_score:.0%}"
+                    }
+                    for r in meta_results
+                ]
+            else:
+                # Sin topic, obtener meta-memorias más recientes
+                recent_metas = self.storage.get_meta_memories_by_project(
+                    project_name=project_name or "default",
+                    limit=3
+                )
+                meta_memories_included = [
+                    {
+                        "id": str(mm.id),
+                        "pattern": mm.pattern_summary,
+                        "lessons": mm.lessons[:3],
+                        "best_practices": mm.best_practices[:2],
+                        "technologies": mm.technologies,
+                        "episode_count": mm.episode_count,
+                        "confidence": f"{mm.confidence:.0%}"
+                    }
+                    for mm in recent_metas
+                ]
+        
+        if meta_memories_included:
+            result["meta_memories"] = meta_memories_included
+            result["meta_memory_note"] = (
+                "⭐ META-MEMORIAS: Conocimiento consolidado de múltiples episodios. "
+                "Priorizar esta información para patrones generales y mejores prácticas."
+            )
+        
+        # =====================================================================
+        # VERIFICAR NECESIDAD DE CONSOLIDACIÓN
+        # =====================================================================
+        consolidation_check = self.storage.check_consolidation_needed(project_name)
+        if consolidation_check.get("should_consolidate"):
+            result["consolidation_recommendation"] = {
+                "should_consolidate": True,
+                "reason": f"Hay {consolidation_check['hot_episodes_count']} episodios con alto uso "
+                         f"o {consolidation_check['estimated_unconsolidated']} sin consolidar",
+                "suggestion": "Considera ejecutar consolidación con: mt consolidate --project <nombre>"
+            }
+        
+        # =====================================================================
+        # PRIORIDAD 2: EPISODIOS INDIVIDUALES (según modo)
+        # =====================================================================
         if total_episodes < THRESHOLD:
             # Modo FULL: devolver resumen de TODAS las memorias
             result["mode"] = "full_context"
@@ -667,17 +874,25 @@ class MemoryTwinMCPServer:
                     top_k=5
                 )
                 relevant_results = self.storage.search_episodes(query)
-                result["relevant_episodes"] = [
-                    {
+                relevant_episodes = []
+                for r in relevant_results:
+                    ep_data = {
                         "id": str(r.episode.id),
                         "type": r.episode.episode_type.value,
                         "task": r.episode.task,
                         "summary": r.episode.solution_summary,
                         "relevance": f"{r.relevance_score:.0%}",
-                        "tags": r.episode.tags
+                        "tags": r.episode.tags,
+                        "lessons": r.episode.lessons_learned,
+                        "is_critical": getattr(r.episode, 'is_critical', False)
                     }
-                    for r in relevant_results
-                ]
+                    # Incluir razonamiento completo si se solicita
+                    if include_reasoning:
+                        ep_data["reasoning"] = r.episode.reasoning_trace.raw_thinking
+                        ep_data["alternatives"] = r.episode.reasoning_trace.alternatives_considered
+                        ep_data["decision_factors"] = r.episode.reasoning_trace.decision_factors
+                    relevant_episodes.append(ep_data)
+                result["relevant_episodes"] = relevant_episodes
                 
                 # También incluir lecciones filtradas por topic
                 lessons = self.rag_engine.get_lessons(project_name=project_name)
@@ -690,6 +905,224 @@ class MemoryTwinMCPServer:
             content=[TextContent(
                 type="text",
                 text=json.dumps(result, indent=2, ensure_ascii=False)
+            )]
+        )
+    
+    async def _consolidate_memories(self, args: dict) -> CallToolResult:
+        """
+        Consolidar episodios similares en meta-memorias.
+        
+        Usa clustering DBSCAN + LLM para sintetizar conocimiento.
+        """
+        from memorytwin.consolidation import MemoryConsolidator
+        
+        project_name = args.get("project_name")
+        if not project_name:
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text="Error: Se requiere project_name para consolidar memorias"
+                )],
+                isError=True
+            )
+        
+        min_cluster_size = args.get("min_cluster_size", 3)
+        
+        try:
+            # Verificar que hay suficientes episodios
+            stats = self.storage.get_statistics(project_name)
+            total_episodes = stats['total_episodes']
+            
+            if total_episodes < min_cluster_size:
+                return CallToolResult(
+                    content=[TextContent(
+                        type="text",
+                        text=json.dumps({
+                            "success": False,
+                            "message": f"El proyecto '{project_name}' solo tiene {total_episodes} episodios. "
+                                      f"Se necesitan al menos {min_cluster_size} para consolidar.",
+                            "total_episodes": total_episodes,
+                            "min_required": min_cluster_size
+                        }, indent=2, ensure_ascii=False)
+                    )]
+                )
+            
+            # Ejecutar consolidación
+            consolidator = MemoryConsolidator(
+                storage=self.storage,
+                min_cluster_size=min_cluster_size
+            )
+            
+            meta_memories = consolidator.consolidate_project(project_name)
+            
+            if not meta_memories:
+                return CallToolResult(
+                    content=[TextContent(
+                        type="text",
+                        text=json.dumps({
+                            "success": False,
+                            "message": "No se encontraron clusters suficientemente grandes para consolidar. "
+                                      "Intenta con un min_cluster_size menor.",
+                            "total_episodes": total_episodes,
+                            "min_cluster_size": min_cluster_size,
+                            "suggestion": "Los episodios pueden ser muy diversos semánticamente"
+                        }, indent=2, ensure_ascii=False)
+                    )]
+                )
+            
+            # Resumen de meta-memorias generadas
+            result = {
+                "success": True,
+                "message": f"¡Consolidación completada! Se generaron {len(meta_memories)} meta-memorias.",
+                "meta_memories_generated": len(meta_memories),
+                "episodes_consolidated": sum(mm.episode_count for mm in meta_memories),
+                "meta_memories": [
+                    {
+                        "id": str(mm.id),
+                        "pattern": mm.pattern_summary,
+                        "lessons_count": len(mm.lessons),
+                        "best_practices_count": len(mm.best_practices),
+                        "episode_count": mm.episode_count,
+                        "confidence": f"{mm.confidence:.0%}",
+                        "technologies": mm.technologies
+                    }
+                    for mm in meta_memories
+                ]
+            }
+            
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=json.dumps(result, indent=2, ensure_ascii=False)
+                )]
+            )
+            
+        except Exception as e:
+            logger.error(f"Error en consolidación: {e}")
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=f"Error durante consolidación: {str(e)}"
+                )],
+                isError=True
+            )
+    
+    async def _mark_episode(self, args: dict) -> CallToolResult:
+        """
+        Marcar un episodio con flags especiales (antipattern, critical, superseded, deprecated).
+        """
+        episode_id = args.get("episode_id")
+        is_antipattern = args.get("is_antipattern")
+        is_critical = args.get("is_critical")
+        superseded_by = args.get("superseded_by")
+        deprecation_reason = args.get("deprecation_reason")
+        
+        if not episode_id:
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text="Error: episode_id es requerido"
+                )],
+                isError=True
+            )
+        
+        # Obtener episodio actual
+        episode = self.storage.get_episode_by_id(episode_id)
+        if not episode:
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=f"Error: No se encontró episodio con ID {episode_id}"
+                )],
+                isError=True
+            )
+        
+        # Actualizar flags
+        updates = {}
+        if is_antipattern is not None:
+            updates["is_antipattern"] = is_antipattern
+        if is_critical is not None:
+            updates["is_critical"] = is_critical
+        if superseded_by is not None:
+            updates["superseded_by"] = superseded_by
+        if deprecation_reason is not None:
+            updates["deprecation_reason"] = deprecation_reason
+        
+        if not updates:
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text="No se especificaron cambios (is_antipattern o is_critical)"
+                )],
+                isError=True
+            )
+        
+        # Aplicar actualizaciones
+        success = self.storage.update_episode_flags(episode_id, updates)
+        
+        if success:
+            result = {
+                "success": True,
+                "episode_id": episode_id,
+                "task": episode.task,
+                "updates_applied": updates,
+                "message": ""
+            }
+            if updates.get("is_antipattern"):
+                result["message"] = (
+                    "⚠️ Episodio marcado como ANTIPATTERN. "
+                    "Se mostrará como advertencia en futuras consultas relevantes."
+                )
+            if updates.get("is_critical"):
+                result["message"] += (
+                    "⭐ Episodio marcado como CRÍTICO. "
+                    "Tendrá prioridad en búsquedas."
+                )
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=json.dumps(result, indent=2, ensure_ascii=False)
+                )]
+            )
+        else:
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=f"Error al actualizar episodio {episode_id}"
+                )],
+                isError=True
+            )
+
+    async def _check_consolidation_status(self, args: dict) -> CallToolResult:
+        """
+        Verificar si se necesita consolidación.
+        
+        Analiza access_count de episodios y cantidad sin consolidar.
+        """
+        project_name = args.get("project_name")
+        
+        status = self.storage.check_consolidation_needed(project_name)
+        
+        # Añadir recomendación legible
+        if status["should_consolidate"]:
+            status["recommendation"] = (
+                "✅ SE RECOMIENDA CONSOLIDAR: "
+                f"Hay {status['hot_episodes_count']} episodios con alto uso "
+                f"y aproximadamente {status['estimated_unconsolidated']} sin consolidar. "
+                "Ejecuta consolidate_memories para generar meta-memorias."
+            )
+        else:
+            status["recommendation"] = (
+                "⏸️ NO ES NECESARIO CONSOLIDAR AÚN: "
+                f"Solo hay {status['total_episodes']} episodios, "
+                f"con {status['hot_episodes_count']} de alto uso. "
+                "El sistema funcionará bien con episodios individuales por ahora."
+            )
+        
+        return CallToolResult(
+            content=[TextContent(
+                type="text",
+                text=json.dumps(status, indent=2, ensure_ascii=False)
             )]
         )
     

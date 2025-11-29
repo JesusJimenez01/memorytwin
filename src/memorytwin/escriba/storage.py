@@ -69,6 +69,12 @@ class EpisodeRecord(Base):
     importance_score = Column(Float, default=1.0)
     access_count = Column(Integer, default=0)
     last_accessed = Column(DateTime, nullable=True)
+    
+    # Campos para memoria activa y útil
+    is_antipattern = Column(Boolean, default=False, index=True)
+    is_critical = Column(Boolean, default=False, index=True)
+    superseded_by = Column(String(36), nullable=True)
+    deprecation_reason = Column(Text, nullable=True)
 
 
 class MetaMemoryRecord(Base):
@@ -345,20 +351,23 @@ class MemoryStorage:
         
         return final_results
     
-    def update_episode_access(self, episode_id: str) -> bool:
+    def update_episode_access(self, episode_id: str) -> tuple[bool, bool]:
         """
         Actualizar estadísticas de acceso de un episodio.
         
         Incrementa access_count y actualiza last_accessed.
-        Esto es parte de la implementación de la forgetting curve.
+        También verifica si se debe disparar consolidación automática.
         
         Args:
             episode_id: ID del episodio a actualizar
             
         Returns:
-            True si se actualizó correctamente, False si no existe
+            Tupla (actualizado, necesita_consolidacion):
+            - actualizado: True si se actualizó correctamente
+            - necesita_consolidacion: True si se recomienda consolidar
         """
         from datetime import datetime, timezone
+        from memorytwin.scoring import should_trigger_consolidation, CONSOLIDATION_ACCESS_THRESHOLD
         
         with self._get_session() as session:
             record = session.query(EpisodeRecord).filter(
@@ -366,14 +375,86 @@ class MemoryStorage:
             ).first()
             
             if not record:
-                return False
+                return False, False
             
             # Incrementar contador de accesos
-            record.access_count = (record.access_count or 0) + 1
+            new_access_count = (record.access_count or 0) + 1
+            record.access_count = new_access_count
             record.last_accessed = datetime.now(timezone.utc)
             
             session.commit()
-            return True
+            
+            # Verificar si este episodio indica necesidad de consolidación
+            needs_consolidation = new_access_count >= CONSOLIDATION_ACCESS_THRESHOLD
+            
+            return True, needs_consolidation
+    
+    def check_consolidation_needed(self, project_name: Optional[str] = None) -> dict:
+        """
+        Verificar si se recomienda ejecutar consolidación automática.
+        
+        Analiza:
+        1. Episodios con alto access_count (patrones "calientes")
+        2. Total de episodios sin consolidar
+        
+        Args:
+            project_name: Filtrar por proyecto (opcional)
+            
+        Returns:
+            Dict con recomendación y estadísticas
+        """
+        from memorytwin.scoring import (
+            CONSOLIDATION_ACCESS_THRESHOLD, 
+            CONSOLIDATION_EPISODE_THRESHOLD,
+            should_trigger_consolidation
+        )
+        
+        with self._get_session() as session:
+            query = session.query(EpisodeRecord)
+            
+            if project_name:
+                query = query.filter(EpisodeRecord.project_name == project_name)
+            
+            # Contar episodios totales
+            total_episodes = query.count()
+            
+            # Encontrar episodios "calientes" (alto access_count)
+            hot_episodes = query.filter(
+                EpisodeRecord.access_count >= CONSOLIDATION_ACCESS_THRESHOLD
+            ).all()
+            
+            # Contar meta-memorias existentes
+            meta_query = session.query(MetaMemoryRecord)
+            if project_name:
+                meta_query = meta_query.filter(MetaMemoryRecord.project_name == project_name)
+            total_meta_memories = meta_query.count()
+            
+            # Estimar episodios consolidados
+            total_consolidated = 0
+            if total_meta_memories > 0:
+                metas = meta_query.all()
+                for meta in metas:
+                    total_consolidated += meta.episode_count
+            
+            unconsolidated = max(0, total_episodes - total_consolidated)
+            
+            # Determinar si se debe consolidar
+            max_access = max([ep.access_count for ep in hot_episodes], default=0) if hot_episodes else 0
+            should_consolidate = should_trigger_consolidation(max_access, unconsolidated)
+            
+            return {
+                "should_consolidate": should_consolidate,
+                "total_episodes": total_episodes,
+                "hot_episodes_count": len(hot_episodes),
+                "max_access_count": max_access,
+                "total_meta_memories": total_meta_memories,
+                "estimated_unconsolidated": unconsolidated,
+                "thresholds": {
+                    "access_threshold": CONSOLIDATION_ACCESS_THRESHOLD,
+                    "episode_threshold": CONSOLIDATION_EPISODE_THRESHOLD
+                },
+                "hot_episode_ids": [ep.id for ep in hot_episodes[:5]]  # Top 5
+            }
     
     def get_episode_by_id(self, episode_id: str) -> Optional[Episode]:
         """Recuperar un episodio por su ID."""
@@ -387,6 +468,81 @@ class MemoryStorage:
                 
             return self._record_to_episode(record)
     
+    def update_episode_flags(
+        self, 
+        episode_id: str, 
+        updates: dict
+    ) -> bool:
+        """
+        Actualizar flags de un episodio (is_antipattern, is_critical, etc).
+        
+        Args:
+            episode_id: UUID del episodio
+            updates: Dict con campos a actualizar
+            
+        Returns:
+            True si se actualizó correctamente
+        """
+        with self._get_session() as session:
+            record = session.query(EpisodeRecord).filter(
+                EpisodeRecord.id == episode_id
+            ).first()
+            
+            if not record:
+                return False
+            
+            # Actualizar campos permitidos
+            allowed_fields = {'is_antipattern', 'is_critical', 'superseded_by', 'deprecation_reason', 'importance_score'}
+            for field, value in updates.items():
+                if field in allowed_fields and hasattr(record, field):
+                    setattr(record, field, value)
+            
+            session.commit()
+            
+            # También actualizar metadatos en ChromaDB si es antipattern
+            if updates.get('is_antipattern') or updates.get('is_critical'):
+                try:
+                    self.collection.update(
+                        ids=[episode_id],
+                        metadatas=[{
+                            "is_antipattern": str(updates.get('is_antipattern', False)),
+                            "is_critical": str(updates.get('is_critical', False))
+                        }]
+                    )
+                except Exception:
+                    pass  # No es crítico si falla ChromaDB
+            
+            return True
+
+    def delete_episode(self, episode_id: str) -> bool:
+        """
+        Eliminar un episodio de ambas bases de datos.
+        
+        Args:
+            episode_id: ID del episodio a eliminar
+            
+        Returns:
+            True si se eliminó correctamente, False si no existía
+        """
+        try:
+            # Eliminar de ChromaDB
+            try:
+                self.collection.delete(ids=[episode_id])
+            except Exception:
+                pass # Puede no existir en ChromaDB
+            
+            # Eliminar de SQLite
+            with self._get_session() as session:
+                record = session.query(EpisodeRecord).filter(EpisodeRecord.id == episode_id).first()
+                if record:
+                    session.delete(record)
+                    session.commit()
+                    return True
+                return False
+        except Exception as e:
+            print(f"Error al eliminar episodio {episode_id}: {e}")
+            return False
+
     def get_episodes_by_project(
         self,
         project_name: str,
@@ -464,6 +620,12 @@ class MemoryStorage:
                     
             return lessons
     
+    def get_all_projects(self) -> list[str]:
+        """Obtener lista de todos los proyectos únicos."""
+        with self._get_session() as session:
+            projects = session.query(EpisodeRecord.project_name).distinct().all()
+            return sorted([p[0] for p in projects if p[0]])
+    
     def get_statistics(self, project_name: Optional[str] = None) -> dict:
         """Obtener estadísticas del almacenamiento."""
         with self._get_session() as session:
@@ -527,7 +689,12 @@ class MemoryStorage:
             # Campos para Forgetting Curve (con defaults para compatibilidad)
             importance_score=record.importance_score if record.importance_score is not None else 1.0,
             access_count=record.access_count if record.access_count is not None else 0,
-            last_accessed=record.last_accessed
+            last_accessed=record.last_accessed,
+            # Campos para memoria activa (con defaults para compatibilidad)
+            is_antipattern=getattr(record, 'is_antipattern', False) or False,
+            is_critical=getattr(record, 'is_critical', False) or False,
+            superseded_by=UUID(record.superseded_by) if getattr(record, 'superseded_by', None) else None,
+            deprecation_reason=getattr(record, 'deprecation_reason', None)
         )
 
     # =========================================================================

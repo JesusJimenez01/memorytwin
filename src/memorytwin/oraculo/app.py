@@ -1,398 +1,412 @@
 """
-Aplicación Gradio para el Oráculo
-=================================
+Oráculo - Gradio Interface for Memory Twin
+==========================================
 
-Interfaz web interactiva para consultar memorias,
-ver timeline y explorar lecciones aprendidas.
+Interfaz gráfica moderna para interactuar con el sistema de memoria.
+Permite:
+1. Consultar memorias (RAG)
+2. Visualizar timeline y lecciones
+3. Gestionar memorias (borrar episodios)
+4. Ver estadísticas del sistema
 """
 
 import gradio as gr
-from typing import Optional
+import pandas as pd
 from datetime import datetime
-
+from memorytwin.escriba import MemoryStorage
+from memorytwin.oraculo import RAGEngine
 from memorytwin.config import get_settings
-from memorytwin.oraculo.rag_engine import RAGEngine
-from memorytwin.escriba.storage import MemoryStorage
 
+# Singleton instances
+_rag_engine = None
+_storage = None
 
-# Inicialización global (se crea al importar)
-_rag_engine: Optional[RAGEngine] = None
-_storage: Optional[MemoryStorage] = None
-
-
-def get_rag_engine() -> RAGEngine:
-    """Obtener instancia singleton del motor RAG."""
+def get_rag_engine():
     global _rag_engine
     if _rag_engine is None:
         _rag_engine = RAGEngine()
     return _rag_engine
 
-
-def get_storage() -> MemoryStorage:
-    """Obtener instancia singleton del storage."""
+def get_storage():
     global _storage
     if _storage is None:
         _storage = MemoryStorage()
     return _storage
 
+# --- Logic Functions ---
 
-# ============================================================
-# Funciones para los componentes de Gradio
-# ============================================================
+def get_available_projects() -> list[str]:
+    """Get list of available projects from storage."""
+    try:
+        storage = get_storage()
+        projects = storage.get_all_projects()
+        return ["(Todos)"] + projects
+    except Exception:
+        return ["(Todos)"]
 
-def answer_question(question: str, project: str, num_results: int) -> tuple[str, str]:
-    """
-    Responder una pregunta usando RAG.
-    
-    Returns:
-        (respuesta, episodios_usados_md)
-    """
+def answer_question(question: str, project_name: str = "", num_episodes: int = 5) -> str:
+    """Answer a question using RAG over memory episodes."""
     if not question.strip():
-        return "Por favor, escribe una pregunta.", ""
+        return "⚠️ Por favor, ingresa una pregunta."
     
     try:
         rag = get_rag_engine()
-        project_filter = project if project and project != "Todos" else None
-        
-        result = rag.query_sync(
-            question=question,
-            project_name=project_filter,
-            top_k=num_results
-        )
-        
-        answer = result["answer"]
-        
-        # Formatear episodios usados
-        episodes_md = "### 📚 Episodios consultados\n\n"
-        if result["episodes_used"]:
-            for i, (ep, score) in enumerate(zip(
-                result["episodes_used"], 
-                result["relevance_scores"]
-            ), 1):
-                episodes_md += f"""
-**{i}. {ep.task[:80]}...**
-- Relevancia: {score:.0%}
-- Tipo: {ep.episode_type.value}
-- Fecha: {ep.timestamp.strftime('%Y-%m-%d %H:%M')}
-- Tags: {', '.join(ep.tags[:5])}
-
-"""
-        else:
-            episodes_md += "No se encontraron episodios relacionados."
-            
-        return answer, episodes_md
-        
+        project = None if project_name in ["", "(Todos)"] else project_name.strip()
+        response = rag.query_sync(question, project_name=project, top_k=num_episodes)
+        return response["answer"]
     except Exception as e:
-        return f"❌ Error al procesar la consulta: {str(e)}", ""
+        return f"❌ Error al procesar la pregunta: {str(e)}"
 
-
-def get_timeline_data(project: str, limit: int) -> str:
-    """Obtener timeline como Markdown."""
+def get_timeline_markdown(project_name: str = "", limit: int = 20) -> str:
+    """Get timeline of episodes formatted as Markdown."""
     try:
-        rag = get_rag_engine()
-        project_filter = project if project and project != "Todos" else None
+        storage = get_storage()
+        project = None if project_name in ["", "(Todos)"] else project_name.strip()
+        episodes = storage.get_timeline(project_name=project, limit=limit)
         
-        timeline = rag.get_timeline(
-            project_name=project_filter,
-            limit=limit
-        )
+        if not episodes:
+            return "ℹ️ No hay episodios registrados."
         
-        if not timeline:
-            return "📅 No hay episodios registrados en la memoria."
-        
-        md = f"# 📅 Timeline de Decisiones ({len(timeline)} episodios)\n\n"
-        
-        current_date = None
-        for item in timeline:
-            # Agrupar por fecha
-            if item["date"] != current_date:
-                current_date = item["date"]
-                md += f"\n## {current_date}\n\n"
+        result = ""
+        for ep in episodes:
+            date = ep.timestamp.strftime("%Y-%m-%d %H:%M")
             
-            icon = "✅" if item["success"] else "❌"
-            type_emoji = {
-                "decision": "🎯",
-                "bug_fix": "🐛",
-                "refactor": "♻️",
-                "feature": "✨",
-                "optimization": "⚡",
-                "learning": "📖",
-                "experiment": "🧪"
-            }.get(item["type"], "📝")
+            # Badges
+            badges = []
+            if ep.is_antipattern:
+                badges.append("🔴 ANTIPATTERN")
+            if ep.is_critical:
+                badges.append("⭐ CRÍTICO")
+            badges_str = " ".join(badges)
             
-            md += f"""### {icon} {type_emoji} {item["time"]} - {item["task"][:60]}...
-> {item["summary"]}
-
-Tags: `{"`  `".join(item["tags"][:4])}`
-
----
-
-"""
+            # Content
+            task_title = ep.task.split('\n')[0][:100]
+            if len(ep.task) > 100:
+                task_title += "..."
+                
+            result += f"### 🗓️ {date}\n"
+            if badges_str:
+                result += f"**{badges_str}**\n\n"
+            
+            result += f"**Tarea:** {task_title}\n\n"
+            result += f"**Tipo:** `{ep.episode_type.value}` | **Proyecto:** `{ep.project_name}`\n"
+            
+            if ep.tags:
+                tags_str = ", ".join([f"`{t}`" for t in ep.tags])
+                result += f"**Tags:** {tags_str}\n"
+            
+            result += "\n---\n\n"
         
-        return md
-        
+        return result
     except Exception as e:
         return f"❌ Error al obtener timeline: {str(e)}"
 
-
-def get_lessons_data(project: str, tag_filter: str) -> str:
-    """Obtener lecciones aprendidas como Markdown."""
+def get_lessons_markdown(project_name: str = "") -> str:
+    """Get aggregated lessons learned formatted as Markdown."""
     try:
-        rag = get_rag_engine()
-        project_filter = project if project and project != "Todos" else None
-        tags = [t.strip() for t in tag_filter.split(",")] if tag_filter else None
-        
-        lessons = rag.get_lessons(
-            project_name=project_filter,
-            tags=tags
-        )
+        storage = get_storage()
+        project = None if project_name in ["", "(Todos)"] else project_name.strip()
+        lessons = storage.get_lessons_learned(project_name=project)
         
         if not lessons:
-            return "📚 No hay lecciones documentadas (o ninguna coincide con los filtros)."
+            return "ℹ️ No hay lecciones aprendidas registradas."
         
-        md = f"# 📚 Lecciones Aprendidas ({len(lessons)})\n\n"
+        result = ""
+        for lesson_data in lessons:
+            task = lesson_data.get('from_task', 'Tarea desconocida')[:60]
+            lesson = lesson_data.get('lesson', '')
+            tags = lesson_data.get('tags', [])
+            timestamp = lesson_data.get('timestamp')
+            date_str = timestamp.strftime('%Y-%m-%d') if timestamp else ''
+            
+            result += f"### 💡 {lesson}\n"
+            result += f"_Aprendido en: {task}... ({date_str})_\n"
+            if tags:
+                tags_str = ", ".join([f"`{t}`" for t in tags])
+                result += f"**Tags:** {tags_str}\n"
+            result += "\n---\n"
         
-        for i, lesson in enumerate(lessons, 1):
-            md += f"""## {i}. {lesson["lesson"]}
-
-**Origen:** {lesson["from_task"][:100]}...
-
-**Fecha:** {lesson["timestamp"].strftime('%Y-%m-%d')}
-
-**Tags:** {', '.join(lesson["tags"][:5])}
-
----
-
-"""
-        
-        return md
-        
+        return result
     except Exception as e:
         return f"❌ Error al obtener lecciones: {str(e)}"
 
-
-def get_statistics() -> str:
-    """Obtener estadísticas como Markdown."""
+def get_statistics_markdown(project_name: str = "") -> str:
+    """Get memory statistics formatted as Markdown."""
     try:
-        rag = get_rag_engine()
-        stats = rag.get_statistics()
+        storage = get_storage()
+        project = None if project_name in ["", "(Todos)"] else project_name.strip()
+        stats = storage.get_statistics(project_name=project)
         
-        type_stats = "\n".join(
-            f"| {k} | {v} |" 
-            for k, v in stats["by_type"].items() if v > 0
-        )
+        if stats.get('total_episodes', 0) == 0:
+            return "ℹ️ No hay episodios registrados."
         
-        assistant_stats = "\n".join(
-            f"| {k} | {v} |" 
-            for k, v in stats["by_assistant"].items()
-        )
+        # General Stats
+        result = "### 📊 Resumen General\n"
+        result += f"- **Total de episodios:** {stats['total_episodes']}\n"
+        result += f"- **Indexados en ChromaDB:** {stats.get('chroma_count', 0)}\n\n"
         
-        md = f"""# 📊 Estadísticas de Memoria
-
-## Resumen General
-
-| Métrica | Valor |
-|---------|-------|
-| Total de Episodios | **{stats["total_episodes"]}** |
-| Registros en ChromaDB | **{stats["chroma_count"]}** |
-
-## Por Tipo de Episodio
-
-| Tipo | Cantidad |
-|------|----------|
-{type_stats}
-
-## Por Asistente de IA
-
-| Asistente | Episodios |
-|-----------|-----------|
-{assistant_stats}
-
----
-*Última actualización: {datetime.now().strftime('%Y-%m-%d %H:%M')}*
-"""
+        # By Type
+        result += "### 🧩 Por Tipo de Episodio\n"
+        by_type = stats.get('by_type', {})
+        for t, count in sorted(by_type.items(), key=lambda x: -x[1]):
+            if count > 0:
+                result += f"- **{t}:** {count}\n"
         
-        return md
+        # By Assistant
+        result += "\n### 🤖 Por Asistente\n"
+        by_assistant = stats.get('by_assistant', {})
+        for a, count in sorted(by_assistant.items(), key=lambda x: -x[1]):
+            if count > 0:
+                result += f"- **{a}:** {count}\n"
         
+        return result
     except Exception as e:
         return f"❌ Error al obtener estadísticas: {str(e)}"
 
-
-def get_project_list() -> list[str]:
-    """Obtener lista de proyectos disponibles."""
+def get_episodes_dataframe(project_name: str = "", limit: int = 50) -> pd.DataFrame:
+    """Get episodes as a DataFrame for the management tab."""
     try:
         storage = get_storage()
-        # Consultar proyectos únicos desde SQLite
-        with storage._get_session() as session:
-            from memorytwin.escriba.storage import EpisodeRecord
-            projects = session.query(
-                EpisodeRecord.project_name
-            ).distinct().all()
+        project = None if project_name in ["", "(Todos)"] else project_name.strip()
+        episodes = storage.get_timeline(project_name=project, limit=limit)
+        
+        data = []
+        for ep in episodes:
+            data.append({
+                "ID": str(ep.id),
+                "Fecha": ep.timestamp.strftime("%Y-%m-%d %H:%M"),
+                "Proyecto": ep.project_name,
+                "Tarea": ep.task[:50] + "..." if len(ep.task) > 50 else ep.task,
+                "Tipo": ep.episode_type.value,
+                "Antipattern": "✅" if ep.is_antipattern else "",
+                "Crítico": "⭐" if ep.is_critical else ""
+            })
             
-            project_list = ["Todos"] + [p[0] for p in projects if p[0]]
-            return project_list
-    except:
-        return ["Todos", "default"]
+        if not data:
+            return pd.DataFrame(columns=["ID", "Fecha", "Proyecto", "Tarea", "Tipo", "Antipattern", "Crítico"])
+            
+        return pd.DataFrame(data)
+    except Exception as e:
+        print(f"Error getting dataframe: {e}")
+        return pd.DataFrame(columns=["Error"])
 
-
-# ============================================================
-# Interfaz Gradio
-# ============================================================
-
-def create_gradio_interface() -> gr.Blocks:
-    """Crear la interfaz Gradio completa."""
+def delete_episode_action(episode_id: str) -> str:
+    """Delete an episode by ID."""
+    if not episode_id.strip():
+        return "⚠️ Por favor, ingresa un ID válido."
     
-    with gr.Blocks(title="Memory Twin - Oráculo") as interface:
+    try:
+        storage = get_storage()
+        success = storage.delete_episode(episode_id.strip())
+        if success:
+            return f"✅ Episodio {episode_id} eliminado correctamente."
+        else:
+            return f"❌ No se encontró el episodio con ID {episode_id}."
+    except Exception as e:
+        return f"❌ Error al eliminar: {str(e)}"
+
+# --- UI Construction ---
+
+def create_gradio_interface():
+    """Create the Gradio interface with a modern theme."""
+    
+    theme = gr.themes.Soft(
+        primary_hue="indigo",
+        secondary_hue="slate",
+        neutral_hue="slate",
+        font=["Inter", "sans-serif"]
+    )
+
+    with gr.Blocks(title="Memory Twin - Oráculo") as app:
+        app.theme = theme
         
-        gr.Markdown("""
-        # 🔮 Memory Twin - Oráculo
-        ### Asistente de Recuperación de Conocimiento Técnico
+        gr.Markdown("# 🧠 Memory Twin | Oráculo")
+        gr.Markdown("Sistema de Memoria Episódica para Asistentes de IA", elem_classes=["text-center"])
         
-        Consulta el razonamiento detrás de las decisiones de código de tu equipo.
-        """)
+        # State for project selection (shared across tabs if needed, but kept simple here)
+        projects = get_available_projects()
         
         with gr.Tabs():
             
-            # ==================== TAB: Q&A ====================
-            with gr.Tab("💬 Preguntas"):
+            # --- Tab 1: Consultas (Chat/RAG) ---
+            with gr.Tab("💬 Consultas", id="tab_chat"):
                 with gr.Row():
-                    with gr.Column(scale=2):
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 🔍 Realizar Consulta")
                         question_input = gr.Textbox(
-                            label="Tu pregunta",
-                            placeholder="¿Por qué elegimos usar JWT para autenticación?",
-                            lines=2
+                            label="Pregunta",
+                            placeholder="Ej: ¿Por qué elegimos ChromaDB como base de datos vectorial?",
+                            lines=4,
+                            info="Consulta tu base de conocimiento consolidada."
                         )
                         
                         with gr.Row():
-                            project_filter = gr.Dropdown(
-                                label="Proyecto",
-                                choices=get_project_list(),
-                                value="Todos",
+                            project_input = gr.Dropdown(
+                                label="Filtrar por Proyecto",
+                                choices=projects,
+                                value="(Todos)",
                                 interactive=True
                             )
-                            num_results = gr.Slider(
-                                label="Episodios a consultar",
+                            num_episodes = gr.Slider(
                                 minimum=1,
                                 maximum=10,
                                 value=5,
-                                step=1
+                                step=1,
+                                label="Episodios a consultar"
                             )
                         
-                        ask_btn = gr.Button("🔍 Consultar Memoria", variant="primary")
-                        
-                    with gr.Column(scale=1):
-                        gr.Markdown("""
-                        ### Ejemplos de preguntas:
-                        - ¿Por qué elegimos la librería X?
-                        - ¿Qué alternativas consideramos para...?
-                        - ¿Qué errores tuvimos al implementar...?
-                        - ¿Cuándo se tomó la decisión de...?
-                        - ¿Qué lecciones aprendimos sobre...?
-                        """)
-                
-                gr.Markdown("---")
-                
-                answer_output = gr.Markdown(
-                    label="Respuesta",
-                    value="*Las respuestas aparecerán aquí...*"
-                )
-                
-                episodes_output = gr.Markdown(
-                    label="Episodios consultados",
-                    value=""
-                )
+                        ask_btn = gr.Button("Consultar Memoria", variant="primary", size="lg")
+                    
+                    with gr.Column(scale=2):
+                        gr.Markdown("### 💡 Respuesta Generada")
+                        answer_output = gr.Markdown(
+                            value="_La respuesta aparecerá aquí..._",
+                            elem_classes=["markdown-text"]
+                        )
                 
                 ask_btn.click(
                     fn=answer_question,
-                    inputs=[question_input, project_filter, num_results],
-                    outputs=[answer_output, episodes_output]
+                    inputs=[question_input, project_input, num_episodes],
+                    outputs=answer_output
                 )
-            
-            # ==================== TAB: Timeline ====================
-            with gr.Tab("📅 Timeline"):
+
+            # --- Tab 2: Gestión de Memorias (CRUD) ---
+            with gr.Tab("🛠️ Gestión", id="tab_manage"):
+                gr.Markdown("### 🗂️ Administrar Episodios de Memoria")
+                gr.Markdown("Visualiza y elimina episodios incorrectos u obsoletos.")
+                
+                with gr.Row():
+                    with gr.Column(scale=3):
+                        manage_project = gr.Dropdown(
+                            label="Filtrar Proyecto",
+                            choices=projects,
+                            value="(Todos)",
+                            interactive=True
+                        )
+                    with gr.Column(scale=1):
+                        refresh_btn = gr.Button("🔄 Actualizar Tabla")
+                
+                episodes_table = gr.Dataframe(
+                    headers=["ID", "Fecha", "Proyecto", "Tarea", "Tipo", "Antipattern", "Crítico"],
+                    datatype=["str", "str", "str", "str", "str", "str", "str"],
+                    interactive=False,
+                    label="Últimos Episodios",
+                    wrap=True
+                )
+                
+                gr.Markdown("---")
+                gr.Markdown("### 🗑️ Eliminar Episodio")
+                
+                with gr.Row():
+                    id_to_delete = gr.Textbox(
+                        label="ID del Episodio",
+                        placeholder="Pega aquí el ID del episodio a eliminar (columna ID de la tabla)",
+                        lines=1
+                    )
+                    delete_btn = gr.Button("🗑️ Eliminar Episodio", variant="stop")
+                
+                delete_output = gr.Markdown()
+                
+                # Events
+                # Load table on click refresh or change project
+                refresh_btn.click(
+                    fn=get_episodes_dataframe,
+                    inputs=[manage_project],
+                    outputs=episodes_table
+                )
+                
+                # Also load on tab select (simulated by loading on launch/change)
+                manage_project.change(
+                    fn=get_episodes_dataframe,
+                    inputs=[manage_project],
+                    outputs=episodes_table
+                )
+                
+                # Delete action
+                delete_btn.click(
+                    fn=delete_episode_action,
+                    inputs=[id_to_delete],
+                    outputs=delete_output
+                ).then( # Refresh table after delete
+                    fn=get_episodes_dataframe,
+                    inputs=[manage_project],
+                    outputs=episodes_table
+                )
+
+            # --- Tab 3: Timeline ---
+            with gr.Tab("📅 Timeline", id="tab_timeline"):
                 with gr.Row():
                     timeline_project = gr.Dropdown(
                         label="Proyecto",
-                        choices=get_project_list(),
-                        value="Todos"
+                        choices=projects,
+                        value="(Todos)",
+                        interactive=True
                     )
                     timeline_limit = gr.Slider(
-                        label="Máximo de episodios",
                         minimum=10,
                         maximum=100,
-                        value=30,
-                        step=10
+                        value=20,
+                        step=10,
+                        label="Límite de episodios"
                     )
-                    refresh_timeline_btn = gr.Button("🔄 Actualizar", variant="secondary")
+                    timeline_btn = gr.Button("Ver Timeline", variant="secondary")
                 
-                timeline_output = gr.Markdown(
-                    value="*Haz clic en 'Actualizar' para ver el timeline...*"
-                )
-                
-                refresh_timeline_btn.click(
-                    fn=get_timeline_data,
+                timeline_output = gr.Markdown()
+                timeline_btn.click(
+                    fn=get_timeline_markdown,
                     inputs=[timeline_project, timeline_limit],
-                    outputs=[timeline_output]
+                    outputs=timeline_output
                 )
-            
-            # ==================== TAB: Lecciones ====================
-            with gr.Tab("📚 Lecciones"):
+
+            # --- Tab 4: Lecciones ---
+            with gr.Tab("📚 Lecciones", id="tab_lessons"):
                 with gr.Row():
                     lessons_project = gr.Dropdown(
                         label="Proyecto",
-                        choices=get_project_list(),
-                        value="Todos"
+                        choices=projects,
+                        value="(Todos)",
+                        interactive=True
                     )
-                    lessons_tags = gr.Textbox(
-                        label="Filtrar por tags (separados por coma)",
-                        placeholder="auth, jwt, security"
-                    )
-                    refresh_lessons_btn = gr.Button("🔄 Actualizar", variant="secondary")
+                    lessons_btn = gr.Button("Ver Lecciones Aprendidas", variant="secondary")
                 
-                lessons_output = gr.Markdown(
-                    value="*Haz clic en 'Actualizar' para ver las lecciones...*"
+                lessons_output = gr.Markdown()
+                lessons_btn.click(
+                    fn=get_lessons_markdown,
+                    inputs=[lessons_project],
+                    outputs=lessons_output
                 )
-                
-                refresh_lessons_btn.click(
-                    fn=get_lessons_data,
-                    inputs=[lessons_project, lessons_tags],
-                    outputs=[lessons_output]
-                )
-            
-            # ==================== TAB: Estadísticas ====================
-            with gr.Tab("📊 Estadísticas"):
-                refresh_stats_btn = gr.Button("🔄 Actualizar Estadísticas", variant="secondary")
-                
-                stats_output = gr.Markdown(
-                    value="*Haz clic en 'Actualizar' para ver las estadísticas...*"
-                )
-                
-                refresh_stats_btn.click(
-                    fn=get_statistics,
-                    inputs=[],
-                    outputs=[stats_output]
-                )
-        
-        gr.Markdown("""
-        ---
-        **Memory Twin** - Agente de Memoria Episódica para Desarrollo de Software  
-        Arquitectura dual: Escriba (Ingesta) + Oráculo (Consulta)
-        """)
-    
-    return interface
 
+            # --- Tab 5: Estadísticas ---
+            with gr.Tab("📊 Estadísticas", id="tab_stats"):
+                with gr.Row():
+                    stats_project = gr.Dropdown(
+                        label="Proyecto",
+                        choices=projects,
+                        value="(Todos)",
+                        interactive=True
+                    )
+                    stats_btn = gr.Button("Ver Estadísticas", variant="secondary")
+                
+                stats_output = gr.Markdown()
+                stats_btn.click(
+                    fn=get_statistics_markdown,
+                    inputs=[stats_project],
+                    outputs=stats_output
+                )
+                
+    return app
 
 def main():
-    """Punto de entrada para ejecutar la interfaz Gradio."""
+    """Main entry point."""
     settings = get_settings()
-    
-    interface = create_gradio_interface()
-    
-    interface.launch(
+    app = create_gradio_interface()
+    print(f"🚀 Iniciando Oráculo en http://0.0.0.0:{settings.gradio_server_port}")
+    app.launch(
+        server_name="0.0.0.0",
         server_port=settings.gradio_server_port,
-        share=settings.gradio_share
+        share=False,
+        show_error=True
     )
-
 
 if __name__ == "__main__":
     main()

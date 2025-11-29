@@ -192,7 +192,7 @@ class MemoryConsolidator:
             include=["embeddings"]
         )
         
-        if not result["embeddings"]:
+        if result["embeddings"] is None or len(result["embeddings"]) == 0:
             return np.array([]), []
         
         embeddings = np.array(result["embeddings"])

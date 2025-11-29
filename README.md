@@ -39,171 +39,165 @@ Sistema de arquitectura dual (Escriba + Oráculo) diseñado para mitigar la "amn
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## 📦 Instalación y Configuración
+## 📦 Instalación Rápida
 
-### 1. Instalación
+### Opción 1: Con pip (Recomendada)
 
 ```bash
 # Clonar el repositorio
+git clone https://github.com/JesusJimenez01/memorytwin.git
 cd memorytwin
 
-# Crear entorno virtual
+# Crear y activar entorno virtual
 python -m venv .venv
 .venv\Scripts\activate  # Windows
 # source .venv/bin/activate  # Linux/Mac
 
-# Instalación mínima (solo CLI y servidor MCP)
+# Instalar Memory Twin
 pip install -e .
 
-# Instalación con interfaz web (Oráculo)
+# Configurar tu proyecto (crea .env, mcp.json, instrucciones)
+mt setup
+
+# Editar .env con tu API Key de Google Gemini
+# Obtén una gratis en: https://aistudio.google.com/apikey
+```
+
+### Opción 2: Con uv (Más rápido)
+
+```bash
+# Instalar uv si no lo tienes
+pip install uv
+
+# Clonar e instalar
+git clone https://github.com/JesusJimenez01/memorytwin.git
+cd memorytwin
+uv venv && uv pip install -e .
+
+# Configurar
+uv run mt setup
+```
+
+### ¡Listo!
+
+Después de `mt setup`:
+1. Edita `.env` y añade tu `GOOGLE_API_KEY`
+2. Reinicia VS Code
+3. Copilot ahora usa Memory Twin automáticamente 🧠
+
+### Extras opcionales
+
+```bash
+# Interfaz web para explorar memorias
 pip install -e ".[ui]"
 
-# Instalación completa (todas las features)
+# Todas las features
 pip install -e ".[all]"
 
-# Instalación para desarrollo
+# Desarrollo (tests, linters)
 pip install -e ".[all,dev]"
 ```
 
-#### Dependencias opcionales disponibles:
+| Extra | Descripción |
+|-------|-------------|
+| `ui` | Interfaz web Gradio |
+| `observability` | Langfuse para trazabilidad |
+| `openai` | Soporte para GPT |
+| `anthropic` | Soporte para Claude |
+| `all` | Todo incluido |
+| `dev` | Herramientas de desarrollo |
 
-| Extra | Descripción | Cuándo usarlo |
-|-------|-------------|---------------|
-| `ui` | Interfaz web Gradio (Oráculo) | Si quieres explorar memorias visualmente |
-| `observability` | Langfuse para trazabilidad | Si necesitas monitoreo de LLM |
-| `sql` | SQLAlchemy + Alembic | Para escalabilidad con PostgreSQL |
-| `openai` | Proveedor OpenAI | Si usas GPT en lugar de Gemini |
-| `anthropic` | Proveedor Anthropic | Si usas Claude en lugar de Gemini |
-| `all` | Todas las features | Instalación completa |
-| `dev` | Herramientas de desarrollo | Para contribuir al proyecto |
+## 🔧 Configuración
 
-### 2. Configuración Inicial
+El comando `mt setup` crea automáticamente:
 
-Memory Twin incluye un comando de configuración automática que prepara tu entorno de desarrollo.
+| Archivo | Propósito |
+|---------|-----------|
+| `.env` | Tu API Key y configuración |
+| `.vscode/mcp.json` | Integración con VS Code/Copilot |
+| `.github/copilot-instructions.md` | Instrucciones para el agente |
+| `.gitignore` | Ignora `.env` y `data/` |
 
-```bash
-# Configura el entorno, crea archivos de configuración y prepara la integración con VS Code
-mt setup
-```
-
-Este comando:
-1.  Crea el archivo `.env` si no existe (deberás editarlo con tu `GOOGLE_API_KEY`).
-2.  Genera `.github/copilot-instructions.md` con las instrucciones para tu agente de IA.
-3.  Genera `.vscode/mcp.json` configurado automáticamente para usar el servidor MCP de Memory Twin en este proyecto.
-
-### 3. Variables de Entorno
-
-Edita el archivo `.env` generado con tus credenciales:
+### Variables de Entorno (.env)
 
 ```env
 # Requerido: API Key de Google Gemini
-GOOGLE_API_KEY=tu_api_key_de_gemini
+# Obtén una gratis en: https://aistudio.google.com/apikey
+GOOGLE_API_KEY=tu_api_key_aqui
 
-# Opcional: Configuración de Almacenamiento (por defecto 'local')
-STORAGE_BACKEND=local
-# STORAGE_BACKEND=chromadb_server
-# CHROMA_SERVER_HOST=localhost
-# CHROMA_SERVER_PORT=8000
-
-# Opcional: Observabilidad con Langfuse
-# LANGFUSE_PUBLIC_KEY=...
-# LANGFUSE_SECRET_KEY=...
-# LANGFUSE_HOST=...
+# Opcional: Rutas de datos (por defecto usa ./data/)
+# CHROMA_PERSIST_DIR=./data/chroma
+# SQLITE_DB_PATH=./data/memory.db
 ```
 
 ## 🚀 Uso
 
 ### Integración con VS Code y Copilot
 
-Gracias al comando `mt setup`, tu VS Code ya debería estar configurado.
-
-1.  **Reinicia VS Code** para que cargue la configuración de MCP.
-2.  Abre el chat de Copilot y verás disponibles las herramientas de Memory Twin.
-3.  Copilot usará automáticamente estas herramientas siguiendo las instrucciones en `.github/copilot-instructions.md`.
+Después de `mt setup` y reiniciar VS Code:
+- Copilot tendrá acceso a las herramientas de Memory Twin
+- Usará automáticamente la memoria del proyecto
+- Capturará decisiones técnicas importantes
 
 #### Herramientas MCP Disponibles
 
 | Herramienta | Descripción |
 |-------------|-------------|
-| `get_project_context` | ⭐ **Principal**. Obtiene contexto inteligente del proyecto. Usar al inicio de cada tarea. |
-| `capture_thinking` | Captura y almacena el razonamiento de decisiones técnicas. |
-| `query_memory` | Consulta memorias usando RAG. Ej: "¿Por qué elegimos X?" |
-| `search_episodes` | Búsqueda semántica de episodios por término. |
-| `get_episode` | Obtiene el contenido completo de un episodio por ID. |
-| `get_lessons` | Obtiene lecciones aprendidas agregadas. |
-| `get_timeline` | Timeline cronológico de decisiones técnicas. |
-| `get_statistics` | Estadísticas de la base de memoria. |
-| `onboard_project` | Analiza un proyecto existente y crea un episodio inicial. |
+| `get_project_context` | ⭐ **Principal**. Obtiene contexto del proyecto |
+| `capture_thinking` | Captura razonamiento de decisiones |
+| `query_memory` | Consultas RAG: "¿Por qué elegimos X?" |
+| `search_episodes` | Búsqueda semántica de episodios |
+| `get_episode` | Contenido completo de un episodio |
+| `get_lessons` | Lecciones aprendidas agregadas |
+| `get_timeline` | Timeline cronológico |
+| `get_statistics` | Estadísticas de la memoria |
+| `onboard_project` | Análisis inicial de proyecto |
+| `consolidate_memories` | Crear meta-memorias |
+| `check_consolidation_status` | Verificar si necesita consolidación |
+| `mark_episode` | Marcar antipatterns/críticos |
 
 ### CLI (Línea de Comandos)
 
-Puedes usar el comando `mt` directamente en tu terminal:
-
 ```bash
-# Capturar un pensamiento desde un archivo
-mt capture --file thinking.txt --assistant copilot --project mi-proyecto
-
-# Capturar desde el portapapeles
-mt capture --clipboard --assistant claude
+# Configurar Memory Twin en tu proyecto
+mt setup
 
 # Buscar en la memoria
 mt search "autenticación JWT"
+
+# Consulta RAG (respuesta generada por LLM)
+mt query "¿por qué elegimos JWT para autenticación?"
 
 # Ver lecciones aprendidas
 mt lessons --project mi-proyecto
 
 # Ver estadísticas
-mt stats --project mi-proyecto
+mt stats
 
-# Consolidar memorias (Meta-Memorias)
+# Consolidar memorias (crea meta-memorias)
 mt consolidate --project mi-proyecto
 
 # Verificar salud del sistema
 mt health-check
+
+# Analizar proyecto existente
+mt onboard /ruta/proyecto
+
+# Capturar pensamiento desde archivo
+mt capture --file thinking.txt --project mi-proyecto
 ```
 
-### Onboarding de Proyectos Existentes
-
-Si empiezas a trabajar en un proyecto que **ya existe** y no tiene historial en Memory Twin, puedes ejecutar un análisis inicial que crea una "memoria base" con la estructura, stack y convenciones del proyecto:
+### Interfaz Web (requiere `pip install -e ".[ui]"`)
 
 ```bash
-# Analizar el proyecto actual
-mt onboard
-
-# O especificar una ruta
-mt onboard /ruta/a/mi-proyecto
-
-# Ver el análisis completo
-mt onboard --verbose
-```
-
-Esto genera un episodio de tipo "onboarding" que incluye:
-- **Stack tecnológico** detectado (Python, Node.js, etc.)
-- **Patrones arquitectónicos** (MVC, DDD, etc.)
-- **Dependencias principales**
-- **Convenciones** de linting, testing, etc.
-
-El agente de IA puede consultar esta información para entender el proyecto desde el primer momento.
-
-### Interfaz Web (Oráculo)
-
-Para explorar la base de conocimiento visualmente:
-
-```bash
-# Iniciar interfaz web
 python -m memorytwin.oraculo.app
 # Abre http://localhost:7860
 ```
 
-## 🧪 Desarrollo y Tests
-
-Para asegurar que todo funciona correctamente, puedes ejecutar los tests:
+## 🧪 Tests
 
 ```bash
-# Instalar dependencias de test
-pip install pytest pytest-asyncio
-
-# Ejecutar tests
+pip install -e ".[dev]"
 pytest
 ```
 
@@ -212,42 +206,25 @@ pytest
 ```
 memorytwin/
 ├── src/memorytwin/
-│   ├── escriba/            # Agente de Ingesta y CLI
-│   ├── oraculo/            # Agente de Consulta y Web UI
+│   ├── escriba/            # Ingesta y CLI
+│   ├── oraculo/            # Consulta y Web UI
 │   ├── mcp_server/         # Servidor MCP
 │   ├── models.py           # Modelos de datos
-│   ├── config.py           # Configuración
-│   └── observability.py    # Integración Langfuse
-├── scripts/                # Scripts de utilidad
-├── data/                   # Datos persistentes (modo local)
-├── tests/                  # Tests unitarios y de integración
-├── pyproject.toml          # Configuración del proyecto y dependencias
-└── README.md
+│   ├── scoring.py          # Sistema de relevancia
+│   ├── consolidation.py    # Meta-memorias
+│   └── config.py           # Configuración
+├── data/                   # Datos persistentes
+├── tests/                  # Tests
+└── pyproject.toml          # Dependencias
 ```
 
 ## 📈 Escalabilidad
 
-### Backends de almacenamiento
-
-Memory Twin utiliza un patrón Strategy para el almacenamiento, permitiendo cambiar entre backends:
-
-| Backend | Escala | Uso recomendado |
-|---------|--------|-----------------|
-| **ChromaDB Local** | ~1,000 episodios | Desarrollo individual |
-| **ChromaDB Server** | ~10,000 episodios | Equipos pequeños |
-| **PostgreSQL + pgvector** | ~100,000+ episodios | Producción / Equipos grandes |
-
-```env
-# Configurar backend en .env
-STORAGE_BACKEND=local              # ChromaDB local (default)
-STORAGE_BACKEND=chromadb_server    # ChromaDB Server
-# STORAGE_BACKEND=postgresql       # Próximamente
-```
-
-### Estrategias para escalar
-
-1. **Paginación**: `get_project_context` usa enfoque híbrido automático
-2. **Archivado**: Episodios antiguos pueden moverse a almacenamiento frío
+| Backend | Escala | Uso |
+|---------|--------|-----|
+| **ChromaDB Local** | ~1,000 episodios | Individual |
+| **ChromaDB Server** | ~10,000 episodios | Equipos |
+| **PostgreSQL** | ~100,000+ | Producción |
 3. **Caché**: Considera Redis para queries frecuentes
 4. **Rate limiting**: Configura límites de API en producción
 
@@ -261,27 +238,29 @@ STORAGE_BACKEND=chromadb_server    # ChromaDB Server
 
 ## 🧠 Memoria Cognitiva Avanzada
 
-Memory Twin incluye características inspiradas en la neurociencia para simular el comportamiento de la memoria humana.
+Memory Twin incluye características inspiradas en la neurociencia para gestionar la relevancia de las memorias.
 
-### Curva de Olvido (Forgetting Curve)
+### Sistema de Refuerzo (Sin Olvido)
 
-Inspirada en la curva de olvido de Ebbinghaus, los episodios tienen un **score híbrido** que combina:
+A diferencia de sistemas que penalizan memorias antiguas, Memory Twin usa un enfoque de **"refuerzo sin olvido"**: todas las memorias persisten indefinidamente, pero las más consultadas ganan relevancia.
 
 ```
-final_score = semantic_score × decay × boost × importance_score
+final_score = semantic_score × boost × importance_score × modifiers
 ```
 
 | Factor | Fórmula | Descripción |
 |--------|---------|-------------|
 | `semantic_score` | Similitud coseno | Relevancia semántica con la query |
-| `decay` | `exp(-0.05 × días)` | Decaimiento temporal (episodios viejos se "olvidan") |
 | `boost` | `1 + 0.1 × accesos` | Episodios consultados frecuentemente se refuerzan |
 | `importance_score` | 0.0 - 1.0 | Relevancia base del episodio |
+| `critical_modifier` | 1.5x | Episodios marcados como críticos |
+| `antipattern_modifier` | 0.3x | Antipatterns aparecen al final, no se excluyen |
 
-**Ejemplo práctico:**
-- Un episodio de hace 30 días tiene ~22% de "frescura" (`exp(-0.05 × 30) ≈ 0.22`)
-- Si fue consultado 10 veces, obtiene un boost de 2x (`1 + 0.1 × 10 = 2.0`)
-- Resultado: se mantiene relevante a pesar del tiempo
+**Beneficios del enfoque:**
+- ✅ Las memorias antiguas pero valiosas nunca se "olvidan"
+- ✅ El uso frecuente refuerza naturalmente lo importante
+- ✅ Los antipatterns siguen visibles como advertencias
+- ✅ Las meta-memorias consolidan patrones recurrentes
 
 ### Meta-Memorias (Consolidación)
 
@@ -405,8 +384,6 @@ alembic downgrade -1
 
 ### Roadmap de resiliencia
 
-- [x] Retry automático con exponential backoff (LLM)
-- [x] Comando `mt health-check` para verificar integridad
 - [ ] Comando `mt backup/restore` para backups
 - [ ] Comando `mt rebuild-embeddings` para regenerar vectores
 - [ ] Transacciones atómicas SQLite + ChromaDB

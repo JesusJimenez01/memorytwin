@@ -516,6 +516,7 @@ class TestMCPServerProjectContext:
         mock_server_class.return_value = mock_server
         
         mock_storage = MagicMock()
+        mock_storage.get_meta_memory_statistics.return_value = {"total_meta_memories": 0}
         mock_storage_class.return_value = mock_storage
         
         mock_rag = MagicMock()
@@ -550,6 +551,7 @@ class TestMCPServerProjectContext:
         mock_server_class.return_value = mock_server
         
         mock_storage = MagicMock()
+        mock_storage.get_meta_memory_statistics.return_value = {"total_meta_memories": 0}
         mock_storage_class.return_value = mock_storage
         
         mock_rag = MagicMock()
@@ -589,6 +591,7 @@ class TestMCPServerProjectContext:
         
         mock_storage = MagicMock()
         mock_storage.search_episodes.return_value = []
+        mock_storage.get_meta_memory_statistics.return_value = {"total_meta_memories": 0}
         mock_storage_class.return_value = mock_storage
         
         mock_rag = MagicMock()

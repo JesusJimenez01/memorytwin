@@ -155,6 +155,24 @@ class Episode(BaseModel):
         default=None,
         description="Última vez que este episodio fue consultado"
     )
+    
+    # Campos para memoria activa y útil
+    is_antipattern: bool = Field(
+        default=False,
+        description="Si True, este episodio representa algo que NO se debe hacer. Se mostrará como ADVERTENCIA."
+    )
+    is_critical: bool = Field(
+        default=False,
+        description="Si True, este episodio es crítico y debe priorizarse en búsquedas."
+    )
+    superseded_by: Optional[UUID] = Field(
+        default=None,
+        description="Si este episodio fue reemplazado por otro más reciente, referencia al nuevo."
+    )
+    deprecation_reason: Optional[str] = Field(
+        default=None,
+        description="Razón por la que este episodio ya no aplica o fue marcado como antipattern."
+    )
 
 
 class MemoryQuery(BaseModel):

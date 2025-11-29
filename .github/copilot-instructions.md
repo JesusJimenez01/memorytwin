@@ -1,78 +1,93 @@
 # Memory Twin - Instrucciones para Agentes IA
 
 ---
-## 🚨 REGLAS OBLIGATORIAS - LEER PRIMERO 🚨
-
-### REGLA 1: CONSULTAR MEMORIA AL INICIO
-**ANTES de responder CUALQUIER pregunta técnica, DEBO ejecutar:**
+## 🚨 FLUJO OBLIGATORIO PARA CADA TAREA 🚨
 
 ```
-get_project_context(topic="<términos relevantes de la pregunta del usuario>")
+┌─────────────────────────────────────────────────────────────────┐
+│  1. CONSULTAR    →   2. PLANIFICAR   →   3. EJECUTAR   →   4. REGISTRAR  │
+│     memorias          con contexto        el plan            resultado     │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### REGLA 2: CAPTURAR MEMORIA AL FINAL
-**DESPUÉS de completar CUALQUIER tarea técnica significativa, DEBO ejecutar:**
+### PASO 1: CONSULTAR MEMORIAS (OBLIGATORIO)
+**ANTES de responder CUALQUIER tarea técnica:**
 
 ```
-capture_thinking(thinking_text="<mi razonamiento completo>", project_name="<proyecto>")
+get_project_context(topic="<términos de la tarea>", include_reasoning=true)
 ```
 
-**NO HAY EXCEPCIONES PARA NINGUNA DE LAS DOS REGLAS.**
+⚠️ **SI HAY WARNINGS DE ANTIPATTERNS**: 
+- DEBES leerlos antes de continuar
+- Si decides ignorarlos, JUSTIFICA por qué
 
-Si no consulto la memoria primero:
-- Puedo sugerir soluciones que ya fallaron
-- Puedo ignorar decisiones de arquitectura previas
-- Puedo repetir errores que ya resolvimos
+### PASO 2: PLANIFICAR CON CONTEXTO
+Basándote en las memorias recuperadas:
+- ¿Hay soluciones previas que puedo reutilizar?
+- ¿Hay errores previos que debo evitar?
+- ¿Qué lecciones aplican a esta tarea?
 
-Si no capturo la memoria después:
-- El conocimiento se pierde para siempre
-- El siguiente agente repetirá el mismo trabajo
-- El proyecto no aprende de las decisiones tomadas
+### PASO 3: EJECUTAR EL PLAN
+Implementa la solución teniendo en cuenta el contexto.
 
-**Mi flujo SIEMPRE es: CONSULTAR → TRABAJAR → CAPTURAR**
+### PASO 4: REGISTRAR RESULTADO (OBLIGATORIO)
+**DESPUÉS de cada tarea técnica:**
+
+```
+capture_thinking(
+    thinking_text="## Tarea\n...\n## Decisiones\n...\n## Resultado\n...",
+    project_name="<proyecto>"
+)
+```
+
+Si algo FALLÓ o fue un error, también usa:
+```
+mark_episode(episode_id="<id>", is_antipattern=true)
+```
 
 ---
 
 ## ¿Qué es Memory Twin?
 Sistema de memoria episódica que captura el razonamiento técnico para evitar "amnesia técnica" en proyectos.
 
-## ⚡ PROTOCOLO DE CONSULTA OBLIGATORIO
+## ⚡ PROTOCOLO DE CONSULTA
 
-### PASO 1: Obtener contexto (OBLIGATORIO)
-Antes de escribir CUALQUIER respuesta técnica:
+### `get_project_context` - ⭐ HERRAMIENTA PRINCIPAL
+**Usar SIEMPRE al inicio de cada tarea.**
 
-```
-get_project_context(topic="<palabras clave de la pregunta>")
-```
+Priorización de resultados:
+0. ⚠️ **ANTIPATTERNS**: Advertencias de errores previos (revisar OBLIGATORIO)
+1. **META-MEMORIAS**: Conocimiento consolidado y patrones
+2. **EPISODIOS**: Decisiones individuales relevantes
 
-Esta herramienta es INTELIGENTE:
-- Si hay **pocas memorias (<20)**: devuelve TODO el contexto del proyecto
-- Si hay **muchas memorias (>=20)**: devuelve estadísticas + recientes + relevantes al topic
+Parámetros:
+- `topic` (recomendado): Palabras clave de la tarea
+- `include_reasoning` (opcional): Si true, incluye razonamiento completo
+- `project_name` (opcional): Filtrar por proyecto
 
-Ejemplos de consultas:
+Ejemplos:
 - Usuario pregunta sobre autenticación → `get_project_context(topic="autenticación login JWT")`
 - Usuario tiene un error → `get_project_context(topic="error <tipo de error>")`
 - Usuario quiere implementar feature → `get_project_context(topic="<nombre feature>")`
-- Usuario pregunta arquitectura → `get_project_context(topic="arquitectura diseño")`
 
 ### PASO 2: Analizar resultados
+- **Si hay WARNINGS**: Leerlos ANTES de proceder
 - Si hay memorias relevantes → Incorporar ese conocimiento
-- Si no hay resultados → Proceder normalmente, pero considerar capturar después
+- Si no hay resultados → Proceder, pero capturar después
 
 ### PASO 3: Responder mencionando contexto
 - "Según memorias previas del proyecto..."
-- "No encontré decisiones previas sobre esto, procedo con..."
-- "Esto ya se resolvió anteriormente, la solución fue..."
+- "⚠️ Hay un antipattern registrado sobre esto, evitaré..."
+- "No encontré decisiones previas, procedo con..."
 
 ### Cuándo consultar (SIEMPRE que aplique):
 | Situación | Consulta obligatoria |
 |-----------|---------------------|
 | Pregunta técnica | `get_project_context(topic="<tema>")` |
 | Error/Bug | `get_project_context(topic="error <descripción>")` |
-| Nueva feature | `get_project_context(topic="<feature>")` + `get_lessons()` |
-| Decisión de arquitectura | `query_memory("<pregunta>")` |
+| Nueva feature | `get_project_context(topic="<feature>")` |
+| Decisión de arquitectura | `get_project_context(topic="arquitectura", include_reasoning=true)` |
 | Primera vez en proyecto | `onboard_project("<ruta>")` |
-| Elegir librería/enfoque | `get_project_context(topic="<opciones>")` |
 
 ## Herramientas MCP Disponibles
 
@@ -88,6 +103,7 @@ Esta herramienta activa el mecanismo de **"Forgetting Curve"**. Al consultar mem
 
 Parámetros:
 - `topic` (opcional): Tema para búsqueda semántica
+- `include_reasoning` (opcional): Incluir raw_thinking completo
 - `project_name` (opcional): Filtrar por proyecto
 
 ### `capture_thinking` - 🔴 CAPTURA OBLIGATORIA
@@ -173,6 +189,27 @@ Obtiene estadísticas de la base de memoria: total de episodios, distribución p
 Parámetros:
 - `project_name` (opcional): Filtrar por proyecto
 
+### `mark_episode` - 🚨 Marcar episodios como antipattern o crítico
+**Usar SIEMPRE que algo haya fallado o sea un error a evitar.**
+
+Permite marcar episodios existentes como:
+- **Antipattern**: Errores, fallos, enfoques que NO funcionaron
+- **Critical**: Decisiones importantes que deben preservarse siempre
+
+También permite marcar episodios como superseded (reemplazados por uno nuevo).
+
+Parámetros:
+- `episode_id` (requerido): UUID del episodio a marcar
+- `is_antipattern` (opcional): true si es un error a evitar
+- `is_critical` (opcional): true si es conocimiento crítico
+- `superseded_by` (opcional): UUID del episodio que lo reemplaza
+- `deprecation_reason` (opcional): Razón por la que ya no aplica
+
+Ejemplo de uso después de un error:
+```
+mark_episode(episode_id="abc-123", is_antipattern=true)
+```
+
 ### `onboard_project` - Onboarding de proyecto existente
 Usar cuando:
 - ✅ Es la primera vez que trabajo en este proyecto
@@ -189,6 +226,25 @@ Genera automáticamente un episodio con:
 Parámetros:
 - `project_path` (requerido): Ruta absoluta al proyecto
 - `project_name` (opcional): Nombre del proyecto (se detecta automáticamente)
+
+### `check_consolidation_status` - Verificar necesidad de consolidación
+Usar para:
+- Determinar si hay suficientes episodios para consolidar
+- Ver estadísticas de episodios con alto access_count
+- Decidir si ejecutar `consolidate_memories`
+
+Parámetros:
+- `project_name` (opcional): Proyecto a verificar
+
+### `consolidate_memories` - Consolidar episodios en meta-memorias
+Usar cuando:
+- El sistema indica que hay episodios sin consolidar
+- Hay muchos episodios (>20) en un proyecto
+- Quieres crear conocimiento consolidado de patrones recurrentes
+
+Parámetros:
+- `project_name` (requerido): Proyecto a consolidar
+- `min_cluster_size` (opcional): Mínimo de episodios por cluster (default: 3)
 
 ## Flujo de Trabajo OBLIGATORIO
 

@@ -158,6 +158,25 @@ class TestMemoryStorage:
         stats = temp_storage.get_statistics("multi-test")
         assert stats["total_episodes"] == 5
 
+    def test_delete_episode(self, temp_storage, sample_episode):
+        """Test de eliminación de episodios."""
+        # Almacenar
+        episode_id = temp_storage.store_episode(sample_episode)
+        
+        # Verificar que existe
+        assert temp_storage.get_episode_by_id(episode_id) is not None
+        
+        # Eliminar
+        success = temp_storage.delete_episode(episode_id)
+        assert success is True
+        
+        # Verificar que ya no existe
+        assert temp_storage.get_episode_by_id(episode_id) is None
+        
+        # Intentar eliminar de nuevo (debe fallar)
+        success = temp_storage.delete_episode(episode_id)
+        assert success is False
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

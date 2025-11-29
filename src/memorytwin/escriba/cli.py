@@ -371,6 +371,7 @@ def handle_setup(args):
     """Configurar Memory Twin en un proyecto."""
     import json
     import os
+    import shutil
     from pathlib import Path
     
     project_path = Path(args.path).resolve()
@@ -379,8 +380,28 @@ def handle_setup(args):
         console.print(f"[red]Error: El directorio no existe: {project_path}[/red]")
         return
     
+    console.print(Panel(
+        f"[bold cyan]🔧 Configurando Memory Twin...[/bold cyan]\n"
+        f"Proyecto: {project_path}",
+        title="Memory Twin - Setup",
+        border_style="cyan"
+    ))
+    
     # Detectar ruta de Python del entorno actual
     python_exe = sys.executable
+    
+    # Determinar la mejor forma de invocar el MCP server
+    # Priorizar 'uv' si está disponible (más moderno y rápido)
+    uv_available = shutil.which("uv") is not None
+    
+    if uv_available:
+        # Usar uvx para ejecutar sin necesidad de activar entorno
+        mcp_command = "uvx"
+        mcp_args = ["--from", "memorytwin", "memorytwin-mcp"]
+    else:
+        # Usar el Python del entorno actual
+        mcp_command = python_exe
+        mcp_args = ["-m", "memorytwin.mcp_server.server"]
     
     # Contenido de las instrucciones para Copilot
     instructions_content = '''# Memory Twin - Instrucciones para Agentes IA
@@ -633,15 +654,18 @@ capture_thinking(
 - **Source assistant**: "copilot" para GitHub Copilot
 '''
     
-    # Configuración MCP para VS Code
+    # Configuración MCP para VS Code - usar comando detectado
     mcp_config = {
         "mcpServers": {
             "memorytwin": {
-                "command": python_exe,
-                "args": ["-m", "memorytwin.mcp_server.server"]
+                "command": mcp_command,
+                "args": mcp_args
             }
         }
     }
+    
+    files_created = []
+    files_updated = []
     
     # Crear directorio .github si no existe
     github_dir = project_path / ".github"
@@ -654,18 +678,71 @@ capture_thinking(
     # Escribir archivo de instrucciones
     instructions_path = github_dir / "copilot-instructions.md"
     instructions_path.write_text(instructions_content, encoding="utf-8")
+    files_created.append(str(instructions_path.relative_to(project_path)))
     
     # Escribir mcp.json
     mcp_path = vscode_dir / "mcp.json"
     mcp_path.write_text(json.dumps(mcp_config, indent=2), encoding="utf-8")
+    files_created.append(str(mcp_path.relative_to(project_path)))
+    
+    # Crear .env si no existe
+    env_path = project_path / ".env"
+    if not env_path.exists():
+        env_content = """# Memory Twin - Configuration
+# ============================
+# Copy this file to .env and fill in your API keys
+
+# Required: Google Gemini API Key
+# Get one at: https://aistudio.google.com/apikey
+GOOGLE_API_KEY=your_google_api_key_here
+
+# Storage Configuration (defaults are fine for local use)
+# CHROMA_PERSIST_DIR=./data/chroma
+# SQLITE_DB_PATH=./data/memory.db
+
+# Optional: Alternative LLM providers
+# OPENAI_API_KEY=your_openai_key
+# ANTHROPIC_API_KEY=your_anthropic_key
+"""
+        env_path.write_text(env_content, encoding="utf-8")
+        files_created.append(".env")
+    
+    # Asegurar que .env está en .gitignore
+    gitignore_path = project_path / ".gitignore"
+    gitignore_updated = False
+    if gitignore_path.exists():
+        gitignore_content = gitignore_path.read_text(encoding="utf-8")
+        if ".env" not in gitignore_content:
+            with open(gitignore_path, "a", encoding="utf-8") as f:
+                f.write("\n# Memory Twin\n.env\ndata/\n")
+            gitignore_updated = True
+            files_updated.append(".gitignore")
+    else:
+        gitignore_path.write_text("# Memory Twin\n.env\ndata/\n", encoding="utf-8")
+        files_created.append(".gitignore")
+    
+    # Mostrar resumen
+    files_list = "\n".join(f"  • [cyan]{f}[/cyan]" for f in files_created)
+    updated_list = "\n".join(f"  • [yellow]{f}[/yellow]" for f in files_updated) if files_updated else ""
+    
+    mcp_method = "uvx (recomendado)" if uv_available else f"Python: {python_exe}"
+    
+    next_steps = """
+[bold]Próximos pasos:[/bold]
+  1. Edita [cyan].env[/cyan] y añade tu GOOGLE_API_KEY
+  2. Reinicia VS Code para cargar la configuración MCP
+  3. ¡Listo! Copilot usará Memory Twin automáticamente
+"""
+    
+    result_text = f"[bold green]✓ Memory Twin configurado![/bold green]\n\n"
+    result_text += f"[bold]Archivos creados:[/bold]\n{files_list}\n"
+    if updated_list:
+        result_text += f"\n[bold]Archivos actualizados:[/bold]\n{updated_list}\n"
+    result_text += f"\n[bold]MCP Server:[/bold] {mcp_method}\n"
+    result_text += next_steps
     
     console.print(Panel(
-        f"[bold green]✓ Memory Twin configurado![/bold green]\n\n"
-        f"Archivos creados:\n"
-        f"  • [cyan]{instructions_path}[/cyan]\n"
-        f"  • [cyan]{mcp_path}[/cyan]\n\n"
-        f"El agente ahora capturará razonamiento automáticamente\n"
-        f"y consultará memorias previas en este proyecto.",
+        result_text,
         title="🧠 Setup Completado",
         border_style="green"
     ))
