@@ -101,8 +101,6 @@ omit = [
     "src/memorytwin/escriba/cli.py",
     "src/memorytwin/oraculo/app.py",
     "src/memorytwin/escriba/project_analyzer.py",
-    "src/memorytwin/escriba/storage_chromadb_server.py",
-    "src/memorytwin/escriba/storage_interface.py",
     "src/memorytwin/observability.py",
 ]
 

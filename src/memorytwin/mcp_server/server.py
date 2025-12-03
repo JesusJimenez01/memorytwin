@@ -21,6 +21,13 @@ from mcp.types import (
 
 from memorytwin.config import get_settings
 
+# Cargar .env para Langfuse
+from dotenv import load_dotenv
+load_dotenv()
+
+# Importar observabilidad después de cargar .env
+from memorytwin.observability import _get_langfuse, _is_disabled, flush_traces
+
 
 def _format_lessons(lessons: list) -> list:
     """Format lessons list ensuring datetime objects are serializable."""
@@ -686,27 +693,232 @@ class MemoryTwinMCPServer:
         
         THRESHOLD = 20  # Umbral para cambiar de estrategia
         
-        # Obtener estadísticas base
-        stats = self.rag_engine.get_statistics()
-        total_episodes = stats.get("total_episodes", 0)
+        # Trazar acceso a memorias
+        langfuse = _get_langfuse() if not _is_disabled() else None
+        span_ctx = None
+        output_data = {}
         
-        # Obtener estadísticas de meta-memorias
-        meta_stats = self.storage.get_meta_memory_statistics(project_name)
-        
-        result = {
-            "mode": "",
-            "total_episodes": total_episodes,
-            "total_meta_memories": meta_stats.get("total_meta_memories", 0),
-            "statistics": stats,
-            "meta_statistics": meta_stats
-        }
-        
-        if total_episodes == 0:
-            result["mode"] = "empty"
-            result["message"] = (
-                "No hay memorias registradas aún. "
-                "Considera ejecutar onboard_project para crear contexto inicial."
-            )
+        try:
+            if langfuse:
+                # Usar context manager para el span
+                span_ctx = langfuse.start_as_current_span(
+                    name="🔍 Acceder Recuerdos",
+                    input={"topic": topic or "sin topic", "project": project_name or "all"},
+                    metadata={"project": project_name or "all", "operation": "get_project_context"}
+                )
+                span_ctx.__enter__()
+            
+            # Obtener estadísticas base
+            stats = self.rag_engine.get_statistics()
+            total_episodes = stats.get("total_episodes", 0)
+            
+            # Obtener estadísticas de meta-memorias
+            meta_stats = self.storage.get_meta_memory_statistics(project_name)
+            
+            result = {
+                "mode": "",
+                "total_episodes": total_episodes,
+                "total_meta_memories": meta_stats.get("total_meta_memories", 0),
+                "statistics": stats,
+                "meta_statistics": meta_stats
+            }
+            
+            if total_episodes == 0:
+                result["mode"] = "empty"
+                result["message"] = (
+                    "No hay memorias registradas aún. "
+                    "Considera ejecutar onboard_project para crear contexto inicial."
+                )
+                # Guardar output para el span
+                output_data = {"mode": "empty", "episodes": 0, "message": "No hay memorias"}
+                return CallToolResult(
+                    content=[TextContent(
+                        type="text",
+                        text=json.dumps(result, indent=2, ensure_ascii=False)
+                    )]
+                )
+            
+            # =================================================================
+            # PRIORIDAD 0: ANTIPATTERNS (ADVERTENCIAS CRÍTICAS)
+            # =================================================================
+            warnings = []
+            if topic:
+                query = MemoryQuery(
+                    query=topic,
+                    project_filter=project_name,
+                    top_k=10
+                )
+                all_results = self.storage.search_episodes(query)
+                for r in all_results:
+                    if getattr(r.episode, 'is_antipattern', False):
+                        warning = {
+                            "type": "ANTIPATTERN",
+                            "severity": "HIGH",
+                            "task": r.episode.task,
+                            "lesson": r.episode.lessons_learned[0] if r.episode.lessons_learned else "Evitar este enfoque",
+                            "relevance": f"{r.relevance_score:.0%}"
+                        }
+                        if include_reasoning:
+                            warning["reasoning"] = r.episode.reasoning_trace.raw_thinking
+                        warnings.append(warning)
+            
+            if warnings:
+                result["⚠️ WARNINGS"] = warnings
+                result["warning_note"] = (
+                    "⛔ ATENCIÓN: Se encontraron antipatterns relevantes. "
+                    "Revisa estas advertencias ANTES de proceder."
+                )
+            
+            # =================================================================
+            # PRIORIDAD 1: META-MEMORIAS (Conocimiento Consolidado)
+            # =================================================================
+            meta_memories_included = []
+            if meta_stats.get("total_meta_memories", 0) > 0:
+                if topic:
+                    meta_results = self.storage.search_meta_memories(
+                        query=topic,
+                        project_name=project_name,
+                        top_k=3
+                    )
+                    meta_memories_included = [
+                        {
+                            "id": str(r.meta_memory.id),
+                            "pattern": r.meta_memory.pattern_summary,
+                            "lessons": r.meta_memory.lessons[:3],
+                            "best_practices": r.meta_memory.best_practices[:2],
+                            "technologies": r.meta_memory.technologies,
+                            "episode_count": r.meta_memory.episode_count,
+                            "confidence": f"{r.meta_memory.confidence:.0%}",
+                            "relevance": f"{r.relevance_score:.0%}"
+                        }
+                        for r in meta_results
+                    ]
+                else:
+                    recent_metas = self.storage.get_meta_memories_by_project(
+                        project_name=project_name or "default",
+                        limit=3
+                    )
+                    meta_memories_included = [
+                        {
+                            "id": str(mm.id),
+                            "pattern": mm.pattern_summary,
+                            "lessons": mm.lessons[:3],
+                            "best_practices": mm.best_practices[:2],
+                            "technologies": mm.technologies,
+                            "episode_count": mm.episode_count,
+                            "confidence": f"{mm.confidence:.0%}"
+                        }
+                        for mm in recent_metas
+                    ]
+            
+            if meta_memories_included:
+                result["meta_memories"] = meta_memories_included
+                result["meta_memory_note"] = (
+                    "⭐ META-MEMORIAS: Conocimiento consolidado de múltiples episodios."
+                )
+            
+            # =================================================================
+            # VERIFICAR NECESIDAD DE CONSOLIDACIÓN
+            # =================================================================
+            consolidation_check = self.storage.check_consolidation_needed(project_name)
+            if consolidation_check.get("should_consolidate"):
+                result["consolidation_recommendation"] = {
+                    "should_consolidate": True,
+                    "reason": f"Hay {consolidation_check['hot_episodes_count']} episodios con alto uso "
+                             f"o {consolidation_check['estimated_unconsolidated']} sin consolidar",
+                    "suggestion": "Considera ejecutar consolidación con: mt consolidate --project <nombre>"
+                }
+            
+            # =================================================================
+            # PRIORIDAD 2: EPISODIOS INDIVIDUALES
+            # =================================================================
+            if total_episodes < THRESHOLD:
+                result["mode"] = "full_context"
+                result["message"] = f"Memoria pequeña ({total_episodes} episodios) - mostrando contexto completo."
+                
+                timeline = self.rag_engine.get_timeline(
+                    limit=total_episodes,
+                    project_name=project_name
+                )
+                
+                episodes_summary = []
+                for ep in timeline:
+                    episode_brief = {
+                        "id": ep["id"],
+                        "type": ep["type"],
+                        "task": ep["task"],
+                        "summary": ep["summary"],
+                        "date": ep["date"],
+                        "tags": ep["tags"]
+                    }
+                    episodes_summary.append(episode_brief)
+                
+                result["episodes"] = episodes_summary
+                
+                if topic:
+                    lessons = self.rag_engine.get_lessons(project_name=project_name)
+                    lessons_list = lessons if isinstance(lessons, list) else lessons.get("lessons", [])
+                    result["aggregated_lessons"] = _format_lessons(lessons_list)
+            
+            else:
+                result["mode"] = "smart_context"
+                result["message"] = f"Memoria madura ({total_episodes} episodios) - mostrando contexto optimizado."
+                
+                recent = self.rag_engine.get_timeline(limit=5, project_name=project_name)
+                result["recent_episodes"] = [
+                    {
+                        "id": ep["id"],
+                        "type": ep["type"],
+                        "task": ep["task"],
+                        "summary": ep["summary"],
+                        "date": ep["date"],
+                        "tags": ep["tags"]
+                    }
+                    for ep in recent
+                ]
+                
+                if topic:
+                    query = MemoryQuery(
+                        query=topic,
+                        project_filter=project_name,
+                        top_k=5
+                    )
+                    relevant_results = self.storage.search_episodes(query)
+                    relevant_episodes = []
+                    for r in relevant_results:
+                        ep_data = {
+                            "id": str(r.episode.id),
+                            "type": r.episode.episode_type.value,
+                            "task": r.episode.task,
+                            "summary": r.episode.solution_summary,
+                            "relevance": f"{r.relevance_score:.0%}",
+                            "tags": r.episode.tags,
+                            "lessons": r.episode.lessons_learned,
+                            "is_critical": getattr(r.episode, 'is_critical', False)
+                        }
+                        if include_reasoning:
+                            ep_data["reasoning"] = r.episode.reasoning_trace.raw_thinking
+                            ep_data["alternatives"] = r.episode.reasoning_trace.alternatives_considered
+                            ep_data["decision_factors"] = r.episode.reasoning_trace.decision_factors
+                        relevant_episodes.append(ep_data)
+                    result["relevant_episodes"] = relevant_episodes
+                    
+                    lessons = self.rag_engine.get_lessons(project_name=project_name)
+                    lessons_list = lessons if isinstance(lessons, list) else lessons.get("lessons", [])
+                    result["aggregated_lessons"] = _format_lessons(lessons_list)
+                else:
+                    result["tip"] = "Proporciona un 'topic' para obtener episodios semánticamente relevantes."
+            
+            # Guardar output para el span
+            output_data = {
+                "mode": result.get("mode"),
+                "episodes_count": total_episodes,
+                "meta_memories_count": meta_stats.get("total_meta_memories", 0),
+                "warnings_count": len(warnings),
+                "relevant_found": len(result.get("relevant_episodes", [])),
+                "meta_memories_found": len(meta_memories_included)
+            }
+            
             return CallToolResult(
                 content=[TextContent(
                     type="text",
@@ -714,199 +926,17 @@ class MemoryTwinMCPServer:
                 )]
             )
         
-        # =====================================================================
-        # PRIORIDAD 0: ANTIPATTERNS (ADVERTENCIAS CRÍTICAS)
-        # Buscar episodios marcados como antipattern relevantes al topic
-        # Estos DEBEN mostrarse primero como advertencias
-        # =====================================================================
-        warnings = []
-        if topic:
-            query = MemoryQuery(
-                query=topic,
-                project_filter=project_name,
-                top_k=10
-            )
-            all_results = self.storage.search_episodes(query)
-            for r in all_results:
-                if getattr(r.episode, 'is_antipattern', False):
-                    warning = {
-                        "type": "ANTIPATTERN",
-                        "severity": "HIGH",
-                        "task": r.episode.task,
-                        "lesson": r.episode.lessons_learned[0] if r.episode.lessons_learned else "Evitar este enfoque",
-                        "relevance": f"{r.relevance_score:.0%}"
-                    }
-                    if include_reasoning:
-                        warning["reasoning"] = r.episode.reasoning_trace.raw_thinking
-                    warnings.append(warning)
-        
-        if warnings:
-            result["⚠️ WARNINGS"] = warnings
-            result["warning_note"] = (
-                "⛔ ATENCIÓN: Se encontraron antipatterns relevantes. "
-                "Revisa estas advertencias ANTES de proceder. "
-                "Si decides ignorarlas, JUSTIFICA tu decisión."
-            )
-        
-        # =====================================================================
-        # PRIORIDAD 1: META-MEMORIAS (Conocimiento Consolidado)
-        # Siempre incluir meta-memorias si existen (acceso rápido a patrones)
-        # =====================================================================
-        meta_memories_included = []
-        if meta_stats.get("total_meta_memories", 0) > 0:
-            if topic:
-                # Búsqueda semántica en meta-memorias
-                meta_results = self.storage.search_meta_memories(
-                    query=topic,
-                    project_name=project_name,
-                    top_k=3
-                )
-                meta_memories_included = [
-                    {
-                        "id": str(r.meta_memory.id),
-                        "pattern": r.meta_memory.pattern_summary,
-                        "lessons": r.meta_memory.lessons[:3],
-                        "best_practices": r.meta_memory.best_practices[:2],
-                        "technologies": r.meta_memory.technologies,
-                        "episode_count": r.meta_memory.episode_count,
-                        "confidence": f"{r.meta_memory.confidence:.0%}",
-                        "relevance": f"{r.relevance_score:.0%}"
-                    }
-                    for r in meta_results
-                ]
-            else:
-                # Sin topic, obtener meta-memorias más recientes
-                recent_metas = self.storage.get_meta_memories_by_project(
-                    project_name=project_name or "default",
-                    limit=3
-                )
-                meta_memories_included = [
-                    {
-                        "id": str(mm.id),
-                        "pattern": mm.pattern_summary,
-                        "lessons": mm.lessons[:3],
-                        "best_practices": mm.best_practices[:2],
-                        "technologies": mm.technologies,
-                        "episode_count": mm.episode_count,
-                        "confidence": f"{mm.confidence:.0%}"
-                    }
-                    for mm in recent_metas
-                ]
-        
-        if meta_memories_included:
-            result["meta_memories"] = meta_memories_included
-            result["meta_memory_note"] = (
-                "⭐ META-MEMORIAS: Conocimiento consolidado de múltiples episodios. "
-                "Priorizar esta información para patrones generales y mejores prácticas."
-            )
-        
-        # =====================================================================
-        # VERIFICAR NECESIDAD DE CONSOLIDACIÓN
-        # =====================================================================
-        consolidation_check = self.storage.check_consolidation_needed(project_name)
-        if consolidation_check.get("should_consolidate"):
-            result["consolidation_recommendation"] = {
-                "should_consolidate": True,
-                "reason": f"Hay {consolidation_check['hot_episodes_count']} episodios con alto uso "
-                         f"o {consolidation_check['estimated_unconsolidated']} sin consolidar",
-                "suggestion": "Considera ejecutar consolidación con: mt consolidate --project <nombre>"
-            }
-        
-        # =====================================================================
-        # PRIORIDAD 2: EPISODIOS INDIVIDUALES (según modo)
-        # =====================================================================
-        if total_episodes < THRESHOLD:
-            # Modo FULL: devolver resumen de TODAS las memorias
-            result["mode"] = "full_context"
-            result["message"] = f"Memoria pequeña ({total_episodes} episodios) - mostrando contexto completo."
-            
-            # Obtener timeline completo (más recientes primero)
-            timeline = self.rag_engine.get_timeline(
-                limit=total_episodes,
-                project_name=project_name
-            )
-            
-            # Crear resumen compacto de cada episodio
-            episodes_summary = []
-            for ep in timeline:
-                episode_brief = {
-                    "id": ep["id"],
-                    "type": ep["type"],
-                    "task": ep["task"],
-                    "summary": ep["summary"],
-                    "date": ep["date"],
-                    "tags": ep["tags"]
-                }
-                episodes_summary.append(episode_brief)
-            
-            result["episodes"] = episodes_summary
-            
-            # Extraer lecciones agregadas si hay topic
-            if topic:
-                lessons = self.rag_engine.get_lessons(project_name=project_name)
-                lessons_list = lessons if isinstance(lessons, list) else lessons.get("lessons", [])
-                result["aggregated_lessons"] = _format_lessons(lessons_list)
-        
-        else:
-            # Modo SMART: estadísticas + recientes + relevantes
-            result["mode"] = "smart_context"
-            result["message"] = f"Memoria madura ({total_episodes} episodios) - mostrando contexto optimizado."
-            
-            # 5 más recientes
-            recent = self.rag_engine.get_timeline(limit=5, project_name=project_name)
-            result["recent_episodes"] = [
-                {
-                    "id": ep["id"],
-                    "type": ep["type"],
-                    "task": ep["task"],
-                    "summary": ep["summary"],
-                    "date": ep["date"],
-                    "tags": ep["tags"]
-                }
-                for ep in recent
-            ]
-            
-            # 5 más relevantes al topic (si se proporciona)
-            if topic:
-                query = MemoryQuery(
-                    query=topic,
-                    project_filter=project_name,
-                    top_k=5
-                )
-                relevant_results = self.storage.search_episodes(query)
-                relevant_episodes = []
-                for r in relevant_results:
-                    ep_data = {
-                        "id": str(r.episode.id),
-                        "type": r.episode.episode_type.value,
-                        "task": r.episode.task,
-                        "summary": r.episode.solution_summary,
-                        "relevance": f"{r.relevance_score:.0%}",
-                        "tags": r.episode.tags,
-                        "lessons": r.episode.lessons_learned,
-                        "is_critical": getattr(r.episode, 'is_critical', False)
-                    }
-                    # Incluir razonamiento completo si se solicita
-                    if include_reasoning:
-                        ep_data["reasoning"] = r.episode.reasoning_trace.raw_thinking
-                        ep_data["alternatives"] = r.episode.reasoning_trace.alternatives_considered
-                        ep_data["decision_factors"] = r.episode.reasoning_trace.decision_factors
-                    relevant_episodes.append(ep_data)
-                result["relevant_episodes"] = relevant_episodes
-                
-                # También incluir lecciones filtradas por topic
-                lessons = self.rag_engine.get_lessons(project_name=project_name)
-                lessons_list = lessons if isinstance(lessons, list) else lessons.get("lessons", [])
-                result["aggregated_lessons"] = _format_lessons(lessons_list)
-            else:
-                result["tip"] = "Proporciona un 'topic' para obtener episodios semánticamente relevantes."
-        
-        return CallToolResult(
-            content=[TextContent(
-                type="text",
-                text=json.dumps(result, indent=2, ensure_ascii=False)
-            )]
-        )
+        finally:
+            # Cerrar span con output y flush
+            if span_ctx:
+                try:
+                    from langfuse.decorators import langfuse_context
+                    langfuse_context.update_current_observation(output=output_data)
+                    span_ctx.__exit__(None, None, None)
+                except Exception:
+                    pass
+            if langfuse:
+                flush_traces()
     
     async def _consolidate_memories(self, args: dict) -> CallToolResult:
         """

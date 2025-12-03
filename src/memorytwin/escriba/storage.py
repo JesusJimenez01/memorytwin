@@ -129,6 +129,9 @@ class MemoryStorage:
     Combina ChromaDB (vectores) y SQLite (metadatos).
     """
     
+    _embedder = None  # Singleton para lazy loading del modelo
+    _embedding_model_name = None
+    
     def __init__(
         self,
         chroma_path: Optional[Path] = None,
@@ -149,9 +152,24 @@ class MemoryStorage:
         self.chroma_path = chroma_path or get_chroma_dir()
         self.sqlite_path = sqlite_path or get_sqlite_path()
         
-        # Inicializar modelo de embeddings con device explícito
-        model_name = embedding_model or settings.embedding_model
-        self.embedder = SentenceTransformer(model_name, device="cpu")
+        # Guardar nombre del modelo para lazy loading
+        MemoryStorage._embedding_model_name = embedding_model or settings.embedding_model
+        
+        # Inicializar ChromaDB
+        self._init_chroma()
+        
+        # Inicializar SQLite
+        self._init_sqlite()
+    
+    @property
+    def embedder(self):
+        """Lazy loading del modelo de embeddings (se carga solo cuando se necesita)."""
+        if MemoryStorage._embedder is None:
+            MemoryStorage._embedder = SentenceTransformer(
+                MemoryStorage._embedding_model_name, 
+                device="cpu"
+            )
+        return MemoryStorage._embedder
         
         # Inicializar ChromaDB
         self._init_chroma()
@@ -208,7 +226,7 @@ class MemoryStorage:
         # Generar embedding
         embedding = self.embedder.encode(combined_text).tolist()
         return embedding
-    
+
     def store_episode(self, episode: Episode) -> str:
         """
         Almacenar un episodio en ambas bases de datos.
@@ -267,7 +285,7 @@ class MemoryStorage:
             session.commit()
             
         return episode_id
-    
+
     def search_episodes(
         self,
         query: MemoryQuery,

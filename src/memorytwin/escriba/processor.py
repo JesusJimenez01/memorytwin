@@ -18,9 +18,9 @@ from tenacity import (
     retry_if_exception_type,
     before_sleep_log,
 )
-
 from memorytwin.config import get_settings
 from memorytwin.models import Episode, EpisodeType, ProcessedInput, ReasoningTrace
+from memorytwin.observability import trace_store_memory, _get_langfuse, _is_disabled, flush_traces
 
 
 # Configurar logging
@@ -98,6 +98,7 @@ class ThoughtProcessor:
             }
         )
         
+    @trace_store_memory
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -121,17 +122,44 @@ class ThoughtProcessor:
         Returns:
             Episode estructurado listo para almacenamiento
         """
+        settings = get_settings()
+        
         # Construir prompt con el input
         user_content = self._build_user_prompt(raw_input)
         
-        # Llamar al LLM
-        response = await self.model.generate_content_async(
-            [
-                {"role": "user", "parts": [STRUCTURING_PROMPT]},
-                {"role": "model", "parts": ["Entendido. Estoy listo para estructurar el razonamiento técnico en formato JSON."]},
-                {"role": "user", "parts": [user_content]}
-            ]
-        )
+        # Trazar generación del LLM
+        langfuse = _get_langfuse() if not _is_disabled() else None
+        generation = None
+        
+        try:
+            if langfuse:
+                generation = langfuse.start_as_current_generation(
+                    name="✍️ Escriba - Estructurar Pensamiento",
+                    model=settings.llm_model,
+                    model_parameters={"temperature": settings.llm_temperature},
+                    input={"thinking_text": raw_input.raw_text[:500], "project": project_name}
+                ).__enter__()
+            
+            # Llamar al LLM
+            response = await self.model.generate_content_async(
+                [
+                    {"role": "user", "parts": [STRUCTURING_PROMPT]},
+                    {"role": "model", "parts": ["Entendido. Estoy listo para estructurar el razonamiento técnico en formato JSON."]},
+                    {"role": "user", "parts": [user_content]}
+                ]
+            )
+            
+            if generation:
+                generation.update(output=response.text[:1000])
+                
+        finally:
+            if generation:
+                try:
+                    generation.end()
+                except Exception:
+                    pass
+            if langfuse:
+                flush_traces()
         
         # Parsear respuesta JSON
         try:

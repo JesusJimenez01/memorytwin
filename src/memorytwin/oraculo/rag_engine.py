@@ -16,6 +16,7 @@ import google.generativeai as genai
 from memorytwin.config import get_settings
 from memorytwin.models import MemoryQuery, MemorySearchResult, MetaMemory, MetaMemorySearchResult
 from memorytwin.escriba.storage import MemoryStorage
+from memorytwin.observability import trace_access_memory, _get_langfuse, _is_disabled, flush_traces
 
 
 # Prompt del sistema para el Oráculo
@@ -88,7 +89,8 @@ class RAGEngine:
                 "max_output_tokens": 2048,
             }
         )
-        
+
+    @trace_access_memory
     async def query(
         self,
         question: str,
@@ -256,7 +258,7 @@ class RAGEngine:
         return "\n".join(context_parts)
     
     async def _generate_answer(self, question: str, context: str) -> str:
-        """Generar respuesta usando el LLM."""
+        """Generar respuesta usando el LLM con observabilidad."""
         prompt = f"""## CONTEXTO DE MEMORIA
 {context}
 
@@ -266,15 +268,42 @@ class RAGEngine:
 ## TU RESPUESTA (en español, usando Markdown)
 """
         
-        response = await self.model.generate_content_async(
-            [
-                {"role": "user", "parts": [ORACLE_SYSTEM_PROMPT]},
-                {"role": "model", "parts": ["Entendido. Estoy listo para responder preguntas sobre la memoria técnica del proyecto basándome únicamente en los episodios proporcionados."]},
-                {"role": "user", "parts": [prompt]}
-            ]
-        )
+        # Trazar generación del LLM
+        langfuse = _get_langfuse() if not _is_disabled() else None
+        generation = None
         
-        return response.text
+        try:
+            if langfuse:
+                generation = langfuse.start_as_current_generation(
+                    name="🧠 Oráculo - Respuesta LLM",
+                    model=get_settings().llm_model,
+                    model_parameters={"temperature": 0.4, "max_output_tokens": 2048},
+                    input={"question": question, "context_length": len(context)}
+                ).__enter__()
+            
+            response = await self.model.generate_content_async(
+                [
+                    {"role": "user", "parts": [ORACLE_SYSTEM_PROMPT]},
+                    {"role": "model", "parts": ["Entendido. Estoy listo para responder preguntas sobre la memoria técnica del proyecto basándome únicamente en los episodios proporcionados."]},
+                    {"role": "user", "parts": [prompt]}
+                ]
+            )
+            
+            answer = response.text
+            
+            if generation:
+                generation.update(output=answer[:1000])  # Limitar output para no saturar
+            
+            return answer
+            
+        finally:
+            if generation:
+                try:
+                    generation.end()
+                except Exception:
+                    pass
+            if langfuse:
+                flush_traces()
     
     def get_timeline(
         self,

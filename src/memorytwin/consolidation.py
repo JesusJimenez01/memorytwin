@@ -22,6 +22,7 @@ import numpy as np
 from sklearn.cluster import DBSCAN
 
 from memorytwin.config import get_settings
+from memorytwin.observability import trace_consolidation
 from memorytwin.models import Episode, MetaMemory
 from memorytwin.escriba.storage import MemoryStorage
 
@@ -127,7 +128,7 @@ class MemoryConsolidator:
         
         self.min_cluster_size = min_cluster_size
         self.cluster_eps = cluster_eps
-    
+
     def consolidate_project(
         self,
         project_name: str,
@@ -199,7 +200,7 @@ class MemoryConsolidator:
         valid_ids = result["ids"]
         
         return embeddings, valid_ids
-    
+
     def _cluster_episodes(
         self, 
         embeddings: np.ndarray,
@@ -234,7 +235,8 @@ class MemoryConsolidator:
             clusters[label].append(episode_ids[idx])
         
         return list(clusters.values())
-    
+
+    @trace_consolidation
     def _synthesize_cluster(
         self,
         episodes: list[Episode],

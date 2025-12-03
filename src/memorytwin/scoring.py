@@ -38,7 +38,6 @@ DEFAULT_ACCESS_BOOST = 0.1  # Boost adicional por cada acceso
 CRITICAL_BOOST = 1.5  # Episodios críticos reciben 50% más relevancia
 ANTIPATTERN_PENALTY = 0.3  # Antipatterns reducidos al 30% de relevancia (pero no excluidos)
 
-
 def compute_hybrid_score(
     episode: Episode,
     semantic_score: float,
