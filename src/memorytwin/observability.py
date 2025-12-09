@@ -17,7 +17,11 @@ import os
 import sys
 from functools import wraps
 from dotenv import load_dotenv
-from langfuse import Langfuse
+
+try:
+    from langfuse import Langfuse
+except ImportError:
+    Langfuse = None
 
 # Cargar variables de entorno
 load_dotenv()
@@ -30,6 +34,8 @@ _langfuse_client = None
 
 def _is_disabled() -> bool:
     """Verificar si Langfuse está deshabilitado (tests o credenciales vacías)."""
+    if Langfuse is None:
+        return True
     if "pytest" in sys.modules:
         return True
     if os.environ.get("PYTEST_CURRENT_TEST"):
