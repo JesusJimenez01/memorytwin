@@ -10,7 +10,6 @@ import json
 import logging
 from typing import Optional
 
-import google.generativeai as genai
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -18,7 +17,7 @@ from tenacity import (
     retry_if_exception_type,
     before_sleep_log,
 )
-from memorytwin.config import get_settings
+from memorytwin.config import get_llm_model, get_settings
 from memorytwin.models import Episode, EpisodeType, ProcessedInput, ReasoningTrace
 from memorytwin.observability import trace_store_memory, _get_langfuse, _is_disabled, flush_traces
 
@@ -29,7 +28,7 @@ logger = logging.getLogger("memorytwin.processor")
 
 # Excepciones que merecen retry
 RETRYABLE_EXCEPTIONS = (
-    Exception,  # Temporalmente todas, refinarlo con excepciones específicas de Gemini
+    Exception,  # TODO: Refinar con excepciones específicas de Gemini
 )
 
 
@@ -78,25 +77,13 @@ class ThoughtProcessor:
     """
     
     def __init__(self, api_key: Optional[str] = None):
-        """Inicializar procesador con API key."""
-        settings = get_settings()
-        self.api_key = api_key or settings.google_api_key
+        """Inicializar procesador con modelo LLM.
         
-        if not self.api_key:
-            raise ValueError(
-                "Se requiere GOOGLE_API_KEY para el procesador de pensamientos. "
-                "Configúrala en .env o pásala como parámetro."
-            )
-        
-        # Configurar Gemini
-        genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel(
-            model_name=settings.llm_model,
-            generation_config={
-                "temperature": settings.llm_temperature,
-                "response_mime_type": "application/json",
-            }
-        )
+        Args:
+            api_key: DEPRECATED - ya no se usa, la API key se lee de config.
+        """
+        # Usar factory centralizada (respuesta JSON)
+        self.model = get_llm_model(response_mime_type="application/json")
         
     @trace_store_memory
     @retry(
@@ -140,8 +127,8 @@ class ThoughtProcessor:
                     input={"thinking_text": raw_input.raw_text[:500], "project": project_name}
                 ).__enter__()
             
-            # Llamar al LLM
-            response = await self.model.generate_content_async(
+            # Llamar al LLM (interfaz unificada)
+            response = await self.model.generate_async(
                 [
                     {"role": "user", "parts": [STRUCTURING_PROMPT]},
                     {"role": "model", "parts": ["Entendido. Estoy listo para estructurar el razonamiento técnico en formato JSON."]},

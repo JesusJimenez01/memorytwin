@@ -170,13 +170,7 @@ class MemoryStorage:
                 device="cpu"
             )
         return MemoryStorage._embedder
-        
-        # Inicializar ChromaDB
-        self._init_chroma()
-        
-        # Inicializar SQLite
-        self._init_sqlite()
-        
+
     def _init_chroma(self):
         """Inicializar cliente y colecciones de ChromaDB."""
         self.chroma_client = chromadb.PersistentClient(

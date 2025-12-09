@@ -15,7 +15,6 @@ import pandas as pd
 from datetime import datetime
 from memorytwin.escriba import MemoryStorage
 from memorytwin.oraculo import RAGEngine
-from memorytwin.config import get_settings
 
 # Singleton instances
 _rag_engine = None

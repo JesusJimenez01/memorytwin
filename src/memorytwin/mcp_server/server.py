@@ -19,13 +19,7 @@ from mcp.types import (
     CallToolResult,
 )
 
-from memorytwin.config import get_settings
-
-# Cargar .env para Langfuse
-from dotenv import load_dotenv
-load_dotenv()
-
-# Importar observabilidad después de cargar .env
+# Importar observabilidad (config.py ya carga .env)
 from memorytwin.observability import _get_langfuse, _is_disabled, flush_traces
 
 
@@ -126,6 +120,108 @@ class MemoryTwinMCPServer:
                             }
                         },
                         "required": ["thinking_text"]
+                    }
+                ),
+                # Nueva herramienta: capture_decision - Versión estructurada
+                Tool(
+                    name="capture_decision",
+                    description=(
+                        "🎯 HERRAMIENTA PREFERIDA PARA CAPTURAR DECISIONES.\n\n"
+                        "Captura una decisión técnica de forma estructurada con campos separados. "
+                        "Más conveniente que capture_thinking cuando se tienen los datos organizados.\n\n"
+                        "Ejemplo de uso:\n"
+                        "- task: 'Elegir base de datos para el proyecto'\n"
+                        "- decision: 'PostgreSQL'\n"
+                        "- alternatives: ['MongoDB', 'MySQL', 'SQLite']\n"
+                        "- reasoning: 'Necesitamos transacciones ACID y queries complejas'\n"
+                        "- lesson: 'Para datos relacionales con transacciones, SQL > NoSQL'"
+                    ),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "task": {
+                                "type": "string",
+                                "description": "Descripción breve de la tarea o problema resuelto"
+                            },
+                            "decision": {
+                                "type": "string",
+                                "description": "La decisión o solución tomada"
+                            },
+                            "alternatives": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Alternativas consideradas (opcional)"
+                            },
+                            "reasoning": {
+                                "type": "string",
+                                "description": "Por qué se tomó esta decisión"
+                            },
+                            "lesson": {
+                                "type": "string",
+                                "description": "Lección aprendida para el futuro (opcional)"
+                            },
+                            "context": {
+                                "type": "string",
+                                "description": "Contexto adicional relevante (opcional)"
+                            },
+                            "code_changes": {
+                                "type": "string",
+                                "description": "Cambios de código asociados (opcional)"
+                            },
+                            "source_assistant": {
+                                "type": "string",
+                                "description": "Asistente fuente: copilot, claude, cursor, etc.",
+                                "default": "unknown"
+                            },
+                            "project_name": {
+                                "type": "string",
+                                "description": "Nombre del proyecto",
+                                "default": "default"
+                            }
+                        },
+                        "required": ["task", "decision", "reasoning"]
+                    }
+                ),
+                # Nueva herramienta: capture_quick - Versión ultra-simplificada
+                Tool(
+                    name="capture_quick",
+                    description=(
+                        "⚡ CAPTURA RÁPIDA - Mínimo esfuerzo.\n\n"
+                        "Para cuando necesitas guardar algo rápido sin mucho detalle. "
+                        "Solo requiere WHAT (qué hiciste) y WHY (por qué).\n\n"
+                        "Ejemplos:\n"
+                        "- what: 'Añadí retry logic al cliente HTTP'\n"
+                        "  why: 'Las llamadas a la API fallaban intermitentemente'\n\n"
+                        "- what: 'Cambié de axios a fetch'\n"
+                        "  why: 'Reducir dependencias, fetch nativo es suficiente'"
+                    ),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "what": {
+                                "type": "string",
+                                "description": "¿Qué hiciste? (acción o cambio realizado)"
+                            },
+                            "why": {
+                                "type": "string",
+                                "description": "¿Por qué lo hiciste? (razón o problema resuelto)"
+                            },
+                            "lesson": {
+                                "type": "string",
+                                "description": "Lección aprendida (opcional pero recomendado)"
+                            },
+                            "project_name": {
+                                "type": "string",
+                                "description": "Nombre del proyecto",
+                                "default": "default"
+                            },
+                            "source_assistant": {
+                                "type": "string",
+                                "description": "Asistente fuente",
+                                "default": "unknown"
+                            }
+                        },
+                        "required": ["what", "why"]
                     }
                 ),
                 Tool(
@@ -407,38 +503,43 @@ class MemoryTwinMCPServer:
             self._lazy_init()
             
             try:
-                if name == "capture_thinking":
-                    return await self._capture_thinking(arguments)
-                elif name == "query_memory":
-                    return await self._query_memory(arguments)
-                elif name == "get_timeline":
-                    return await self._get_timeline(arguments)
-                elif name == "get_lessons":
-                    return await self._get_lessons(arguments)
-                elif name == "search_episodes":
-                    return await self._search_episodes(arguments)
-                elif name == "get_statistics":
-                    return await self._get_statistics(arguments)
-                elif name == "get_episode":
-                    return await self._get_episode(arguments)
-                elif name == "onboard_project":
-                    return await self._onboard_project(arguments)
-                elif name == "get_project_context":
-                    return await self._get_project_context(arguments)
-                elif name == "consolidate_memories":
-                    return await self._consolidate_memories(arguments)
-                elif name == "check_consolidation_status":
-                    return await self._check_consolidation_status(arguments)
-                elif name == "mark_episode":
-                    return await self._mark_episode(arguments)
-                else:
-                    return CallToolResult(
-                        content=[TextContent(
-                            type="text",
-                            text=f"Herramienta desconocida: {name}"
-                        )],
-                        isError=True
-                    )
+                match name:
+                    case "capture_thinking":
+                        return await self._capture_thinking(arguments)
+                    case "capture_decision":
+                        return await self._capture_decision(arguments)
+                    case "capture_quick":
+                        return await self._capture_quick(arguments)
+                    case "query_memory":
+                        return await self._query_memory(arguments)
+                    case "get_timeline":
+                        return await self._get_timeline(arguments)
+                    case "get_lessons":
+                        return await self._get_lessons(arguments)
+                    case "search_episodes":
+                        return await self._search_episodes(arguments)
+                    case "get_statistics":
+                        return await self._get_statistics(arguments)
+                    case "get_episode":
+                        return await self._get_episode(arguments)
+                    case "onboard_project":
+                        return await self._onboard_project(arguments)
+                    case "get_project_context":
+                        return await self._get_project_context(arguments)
+                    case "consolidate_memories":
+                        return await self._consolidate_memories(arguments)
+                    case "check_consolidation_status":
+                        return await self._check_consolidation_status(arguments)
+                    case "mark_episode":
+                        return await self._mark_episode(arguments)
+                    case _:
+                        return CallToolResult(
+                            content=[TextContent(
+                                type="text",
+                                text=f"Herramienta desconocida: {name}"
+                            )],
+                            isError=True
+                        )
             except Exception as e:
                 logger.error(f"Error en herramienta {name}: {e}")
                 return CallToolResult(
@@ -482,6 +583,99 @@ class MemoryTwinMCPServer:
             )]
         )
     
+    async def _capture_decision(self, args: dict) -> CallToolResult:
+        """Capturar decisión técnica de forma estructurada."""
+        # Construir texto estructurado a partir de campos separados
+        parts = []
+        parts.append(f"## Tarea\n{args['task']}")
+        
+        if args.get("context"):
+            parts.append(f"## Contexto\n{args['context']}")
+        
+        if args.get("alternatives"):
+            alts = "\n".join(f"- {alt}" for alt in args["alternatives"])
+            parts.append(f"## Alternativas consideradas\n{alts}")
+        
+        parts.append(f"## Decisión\n{args['decision']}")
+        parts.append(f"## Razonamiento\n{args['reasoning']}")
+        
+        if args.get("lesson"):
+            parts.append(f"## Lección aprendida\n{args['lesson']}")
+        
+        thinking_text = "\n\n".join(parts)
+        
+        raw_input = ProcessedInput(
+            raw_text=thinking_text,
+            code_changes=args.get("code_changes"),
+            source="mcp"
+        )
+        
+        episode = await self.processor.process_thought(
+            raw_input,
+            project_name=args.get("project_name", "default"),
+            source_assistant=args.get("source_assistant", "unknown")
+        )
+        
+        episode_id = self.storage.store_episode(episode)
+        
+        result = {
+            "success": True,
+            "episode_id": episode_id,
+            "task": episode.task,
+            "decision": args["decision"],
+            "type": episode.episode_type.value,
+            "tags": episode.tags,
+            "lessons_learned": episode.lessons_learned
+        }
+        
+        return CallToolResult(
+            content=[TextContent(
+                type="text",
+                text=json.dumps(result, indent=2, ensure_ascii=False)
+            )]
+        )
+    
+    async def _capture_quick(self, args: dict) -> CallToolResult:
+        """Captura rápida con mínimo esfuerzo."""
+        # Construir texto simple a partir de what/why
+        parts = [
+            f"## Qué hice\n{args['what']}",
+            f"## Por qué\n{args['why']}"
+        ]
+        
+        if args.get("lesson"):
+            parts.append(f"## Lección\n{args['lesson']}")
+        
+        thinking_text = "\n\n".join(parts)
+        
+        raw_input = ProcessedInput(
+            raw_text=thinking_text,
+            source="mcp"
+        )
+        
+        episode = await self.processor.process_thought(
+            raw_input,
+            project_name=args.get("project_name", "default"),
+            source_assistant=args.get("source_assistant", "unknown")
+        )
+        
+        episode_id = self.storage.store_episode(episode)
+        
+        result = {
+            "success": True,
+            "episode_id": episode_id,
+            "task": episode.task,
+            "type": episode.episode_type.value,
+            "lessons_learned": episode.lessons_learned
+        }
+        
+        return CallToolResult(
+            content=[TextContent(
+                type="text",
+                text=json.dumps(result, indent=2, ensure_ascii=False)
+            )]
+        )
+
     async def _query_memory(self, args: dict) -> CallToolResult:
         """Consultar memoria con RAG."""
         result = await self.rag_engine.query(
@@ -944,6 +1138,8 @@ class MemoryTwinMCPServer:
         
         Usa clustering DBSCAN + LLM para sintetizar conocimiento.
         """
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
         from memorytwin.consolidation import MemoryConsolidator
         
         project_name = args.get("project_name")
@@ -977,13 +1173,38 @@ class MemoryTwinMCPServer:
                     )]
                 )
             
-            # Ejecutar consolidación
+            # Ejecutar consolidación en thread pool para no bloquear event loop
             consolidator = MemoryConsolidator(
                 storage=self.storage,
                 min_cluster_size=min_cluster_size
             )
             
-            meta_memories = consolidator.consolidate_project(project_name)
+            # Usar ThreadPoolExecutor para operaciones síncronas con LLM
+            loop = asyncio.get_event_loop()
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                try:
+                    # Timeout de 120 segundos (puede tomar tiempo con varios clusters)
+                    meta_memories = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            executor,
+                            consolidator.consolidate_project,
+                            project_name
+                        ),
+                        timeout=120.0
+                    )
+                except asyncio.TimeoutError:
+                    return CallToolResult(
+                        content=[TextContent(
+                            type="text",
+                            text=json.dumps({
+                                "success": False,
+                                "message": "La consolidación excedió el tiempo límite (120s). "
+                                          "Esto puede ocurrir con muchos episodios o conexión lenta al LLM.",
+                                "suggestion": "Intenta con un min_cluster_size mayor para reducir clusters"
+                            }, indent=2, ensure_ascii=False)
+                        )],
+                        isError=True
+                    )
             
             if not meta_memories:
                 return CallToolResult(
@@ -1167,12 +1388,17 @@ class MemoryTwinMCPServer:
             )
 
 
-async def main():
-    """Punto de entrada del servidor MCP."""
+async def _async_main():
+    """Punto de entrada asíncrono del servidor MCP."""
     server = MemoryTwinMCPServer()
     await server.run()
 
 
-if __name__ == "__main__":
+def main():
+    """Punto de entrada síncrono para console scripts."""
     import asyncio
-    asyncio.run(main())
+    asyncio.run(_async_main())
+
+
+if __name__ == "__main__":
+    main()

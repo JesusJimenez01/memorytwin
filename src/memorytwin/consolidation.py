@@ -13,72 +13,50 @@ El proceso:
 """
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
-import google.generativeai as genai
 import numpy as np
 from sklearn.cluster import DBSCAN
 
-from memorytwin.config import get_settings
+from memorytwin.config import get_llm_model
 from memorytwin.observability import trace_consolidation
 from memorytwin.models import Episode, MetaMemory
 from memorytwin.escriba.storage import MemoryStorage
 
+logger = logging.getLogger(__name__)
 
-# Prompt para síntesis de episodios en meta-memoria
-CONSOLIDATION_PROMPT = """Eres un experto en sintetizar conocimiento técnico. 
-Analiza los siguientes episodios de memoria relacionados y genera una meta-memoria consolidada.
 
-EPISODIOS A CONSOLIDAR:
+# Prompt para síntesis de episodios en meta-memoria (optimizado para rapidez)
+CONSOLIDATION_PROMPT = """Sintetiza estos episodios de memoria técnica en una meta-memoria consolidada.
+
+EPISODIOS:
 {episodes_text}
 
----
-
-INSTRUCCIONES:
-1. Identifica el PATRÓN COMÚN que conecta estos episodios
-2. Extrae las LECCIONES APRENDIDAS más importantes (máximo 5)
-3. Identifica MEJORES PRÁCTICAS derivadas (máximo 3)
-4. Detecta ANTI-PATRONES o errores comunes a evitar (máximo 3)
-5. Lista EXCEPCIONES donde el patrón no aplica (máximo 3)
-6. Identifica CASOS LÍMITE descubiertos (máximo 2)
-7. Define los CONTEXTOS donde este conocimiento aplica
-8. Lista las TECNOLOGÍAS involucradas
-
-RESPONDE EN JSON con esta estructura exacta:
+Responde SOLO en JSON:
 {{
-    "pattern": "Descripción detallada del patrón identificado (2-3 oraciones)",
-    "pattern_summary": "Resumen ejecutivo en 1 oración",
-    "lessons": ["lección 1", "lección 2", ...],
-    "best_practices": ["práctica 1", ...],
-    "antipatterns": ["antipatrón 1", ...],
-    "exceptions": ["excepción 1", ...],
-    "edge_cases": ["caso límite 1", ...],
-    "contexts": ["contexto 1", ...],
-    "technologies": ["tech1", "tech2", ...],
+    "pattern": "Patrón común identificado (1-2 oraciones)",
+    "pattern_summary": "Resumen en 1 oración corta",
+    "lessons": ["lección 1", "lección 2"],
+    "best_practices": ["práctica 1"],
+    "antipatterns": ["antipatrón 1"],
+    "technologies": ["tech1", "tech2"],
     "coherence_score": 0.8
 }}
-
-El coherence_score indica qué tan relacionados están los episodios (0.0-1.0).
-Si los episodios son muy diversos, el score será bajo.
-
-IMPORTANTE: Responde SOLO con el JSON, sin explicaciones adicionales.
 """
 
 
 def format_episode_for_consolidation(episode: Episode) -> str:
-    """Formatear un episodio para incluirlo en el prompt de consolidación."""
-    return f"""
-### Episodio {episode.id}
-- **Fecha**: {episode.timestamp.strftime('%Y-%m-%d')}
-- **Tarea**: {episode.task}
-- **Contexto**: {episode.context}
-- **Razonamiento**: {episode.reasoning_trace.raw_thinking[:500]}...
-- **Solución**: {episode.solution_summary}
-- **Lecciones**: {', '.join(episode.lessons_learned) if episode.lessons_learned else 'N/A'}
-- **Tags**: {', '.join(episode.tags) if episode.tags else 'N/A'}
-"""
+    """Formatear un episodio para incluirlo en el prompt de consolidación (versión compacta)."""
+    # Limitar razonamiento a 200 chars para mantener prompts pequeños
+    reasoning = episode.reasoning_trace.raw_thinking[:200] if episode.reasoning_trace.raw_thinking else ""
+    lessons = ', '.join(episode.lessons_learned[:2]) if episode.lessons_learned else 'N/A'
+    
+    return f"""[{episode.timestamp.strftime('%Y-%m-%d')}] {episode.task}
+Solución: {episode.solution_summary[:100]}
+Lecciones: {lessons}"""
 
 
 class MemoryConsolidator:
@@ -94,40 +72,27 @@ class MemoryConsolidator:
         storage: Optional[MemoryStorage] = None,
         api_key: Optional[str] = None,
         min_cluster_size: int = 3,
-        cluster_eps: float = 0.5
+        cluster_eps: float = 0.4,  # Balance entre cohesión y cobertura
+        max_episodes_per_cluster: int = 8  # Limitar tamaño de prompts
     ):
         """
         Inicializar el consolidador.
         
         Args:
             storage: Almacenamiento de memoria
-            api_key: API key para el LLM
+            api_key: DEPRECATED - ya no se usa, la API key se lee de config.
             min_cluster_size: Mínimo de episodios para formar cluster
-            cluster_eps: Radio máximo para clustering DBSCAN
+            cluster_eps: Radio máximo para clustering DBSCAN (menor = más estricto)
+            max_episodes_per_cluster: Máximo de episodios por cluster para limitar prompts
         """
         self.storage = storage or MemoryStorage()
         
-        settings = get_settings()
-        self.api_key = api_key or settings.google_api_key
-        
-        if not self.api_key:
-            raise ValueError(
-                "Se requiere GOOGLE_API_KEY para consolidación. "
-                "Configúrala en .env o pásala como parámetro."
-            )
-        
-        # Configurar Gemini
-        genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel(
-            model_name=settings.llm_model,
-            generation_config={
-                "temperature": 0.3,  # Más determinístico para síntesis
-                "max_output_tokens": 2048,
-            }
-        )
+        # Usar factory centralizada (temperatura baja, tokens reducidos para rapidez)
+        self.model = get_llm_model(temperature=0.2, max_output_tokens=1024)
         
         self.min_cluster_size = min_cluster_size
         self.cluster_eps = cluster_eps
+        self.max_episodes_per_cluster = max_episodes_per_cluster
 
     def consolidate_project(
         self,
@@ -144,31 +109,51 @@ class MemoryConsolidator:
         Returns:
             Lista de meta-memorias generadas
         """
+        logger.info(f"Iniciando consolidación para proyecto: {project_name}")
+        
         # Obtener episodios del proyecto
         episodes = self.storage.get_episodes_by_project(project_name, limit=200)
+        logger.info(f"Encontrados {len(episodes)} episodios")
         
         if len(episodes) < self.min_cluster_size:
+            logger.info(f"Insuficientes episodios ({len(episodes)} < {self.min_cluster_size})")
             return []
         
         # Obtener embeddings de ChromaDB
         embeddings, episode_ids = self._get_episode_embeddings(episodes)
+        logger.info(f"Obtenidos {len(embeddings)} embeddings")
         
         if len(embeddings) < self.min_cluster_size:
+            logger.info("Insuficientes embeddings")
             return []
         
         # Clustering
         clusters = self._cluster_episodes(embeddings, episode_ids)
+        logger.info(f"Generados {len(clusters)} clusters")
         
         # Generar meta-memorias para cada cluster
         meta_memories = []
-        for cluster_episode_ids in clusters:
+        for i, cluster_episode_ids in enumerate(clusters):
+            logger.info(f"Procesando cluster {i+1}/{len(clusters)} ({len(cluster_episode_ids)} episodios)")
+            
             # Obtener episodios del cluster
             cluster_episodes = [
                 ep for ep in episodes 
                 if str(ep.id) in cluster_episode_ids
             ]
             
+            # Limitar episodios por cluster para evitar prompts enormes
+            if len(cluster_episodes) > self.max_episodes_per_cluster:
+                # Seleccionar los más recientes
+                cluster_episodes = sorted(
+                    cluster_episodes, 
+                    key=lambda e: e.timestamp, 
+                    reverse=True
+                )[:self.max_episodes_per_cluster]
+                logger.info(f"Cluster limitado a {self.max_episodes_per_cluster} episodios más recientes")
+            
             if len(cluster_episodes) >= self.min_cluster_size:
+                logger.info(f"Sintetizando cluster {i+1} con LLM...")
                 meta_memory = self._synthesize_cluster(
                     cluster_episodes, 
                     project_name
@@ -177,7 +162,9 @@ class MemoryConsolidator:
                     # Almacenar
                     self.storage.store_meta_memory(meta_memory)
                     meta_memories.append(meta_memory)
+                    logger.info(f"Meta-memoria {i+1} creada: {meta_memory.pattern_summary[:50]}...")
         
+        logger.info(f"Consolidación completada: {len(meta_memories)} meta-memorias generadas")
         return meta_memories
     
     def _get_episode_embeddings(
@@ -260,8 +247,8 @@ class MemoryConsolidator:
         prompt = CONSOLIDATION_PROMPT.format(episodes_text=episodes_text)
         
         try:
-            # Llamar al LLM
-            response = self.model.generate_content(prompt)
+            # Llamar al LLM (interfaz unificada)
+            response = self.model.generate(prompt)
             
             # Parsear respuesta JSON
             response_text = response.text.strip()

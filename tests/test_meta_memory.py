@@ -197,11 +197,11 @@ class TestConsolidationHelpers:
         
         formatted = format_episode_for_consolidation(episode)
         
+        # El formato compacto incluye fecha, tarea, solución y lecciones
         assert "Implementar autenticación JWT" in formatted
         assert "2024-01-15" in formatted
-        assert "FastAPI" in formatted
-        assert "OAuth2" in formatted  # Del thinking truncado
-        assert "auth" in formatted
+        assert "pyjwt" in formatted  # De la solución
+        assert "Rotar claves regularmente" in formatted  # De las lecciones
 
 
 class TestMetaMemoryTimestamps:

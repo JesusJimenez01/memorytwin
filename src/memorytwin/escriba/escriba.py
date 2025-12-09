@@ -12,7 +12,6 @@ from typing import Optional
 from rich.console import Console
 from rich.panel import Panel
 
-from memorytwin.config import get_settings
 from memorytwin.models import Episode, ProcessedInput
 from memorytwin.escriba.processor import ThoughtProcessor
 from memorytwin.escriba.storage import MemoryStorage

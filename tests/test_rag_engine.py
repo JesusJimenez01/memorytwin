@@ -24,20 +24,12 @@ class TestRAGEngine:
     """Tests para RAGEngine."""
 
     @pytest.fixture
-    def mock_settings(self):
-        """Mock de configuración."""
-        with patch("memorytwin.oraculo.rag_engine.get_settings") as mock:
-            settings = MagicMock()
-            settings.google_api_key = "test-api-key"
-            settings.llm_model = "gemini-2.0-flash"
-            mock.return_value = settings
-            yield mock
-
-    @pytest.fixture
-    def mock_genai(self):
-        """Mock de Google Generative AI."""
-        with patch("memorytwin.oraculo.rag_engine.genai") as mock:
-            yield mock
+    def mock_llm_model(self):
+        """Mock de get_llm_model factory."""
+        with patch("memorytwin.oraculo.rag_engine.get_llm_model") as mock:
+            mock_model = MagicMock()
+            mock.return_value = mock_model
+            yield mock, mock_model
 
     @pytest.fixture
     def mock_storage(self):
@@ -75,32 +67,35 @@ class TestRAGEngine:
             relevance_score=0.92
         )
 
-    def test_rag_engine_init(self, mock_settings, mock_genai, mock_storage):
+    def test_rag_engine_init(self, mock_llm_model, mock_storage):
         """Test de inicialización de RAGEngine."""
+        mock_factory, mock_model = mock_llm_model
+        
         engine = RAGEngine(storage=mock_storage)
         
-        mock_genai.configure.assert_called_once_with(api_key="test-api-key")
+        # Verifica que se llamó a la factory
+        mock_factory.assert_called_once()
         assert engine.storage == mock_storage
-        assert engine.api_key == "test-api-key"
+        assert engine.model == mock_model
 
-    def test_rag_engine_init_custom_api_key(self, mock_settings, mock_genai, mock_storage):
-        """Test de inicialización con API key personalizada."""
-        engine = RAGEngine(storage=mock_storage, api_key="custom-key")
+    def test_rag_engine_init_api_key_deprecated(self, mock_llm_model, mock_storage):
+        """Test que api_key está deprecated pero no rompe."""
+        mock_factory, mock_model = mock_llm_model
         
-        mock_genai.configure.assert_called_once_with(api_key="custom-key")
-        assert engine.api_key == "custom-key"
+        # No debería fallar aunque se pase api_key (deprecated)
+        engine = RAGEngine(storage=mock_storage, api_key="ignored-key")
+        
+        assert engine.model == mock_model
 
-    def test_rag_engine_init_no_api_key_raises(self, mock_genai, mock_storage):
-        """Test que falla sin API key."""
-        with patch("memorytwin.oraculo.rag_engine.get_settings") as mock:
-            settings = MagicMock()
-            settings.google_api_key = None
-            mock.return_value = settings
+    def test_rag_engine_init_no_api_key_raises(self, mock_storage):
+        """Test que falla sin API key en config."""
+        with patch("memorytwin.oraculo.rag_engine.get_llm_model") as mock:
+            mock.side_effect = ValueError("Se requiere GOOGLE_API_KEY")
             
             with pytest.raises(ValueError, match="Se requiere GOOGLE_API_KEY"):
                 RAGEngine(storage=mock_storage)
 
-    def test_build_context(self, mock_settings, mock_genai, mock_storage, sample_search_result):
+    def test_build_context(self, mock_llm_model, mock_storage, sample_search_result):
         """Test de construcción de contexto."""
         engine = RAGEngine(storage=mock_storage)
         
@@ -117,7 +112,7 @@ class TestRAGEngine:
         assert "auth" in context
 
     def test_build_context_multiple_episodes(
-        self, mock_settings, mock_genai, mock_storage, sample_episode
+        self, mock_llm_model, mock_storage, sample_episode
     ):
         """Test de contexto con múltiples episodios."""
         episode2 = Episode(
@@ -147,7 +142,7 @@ class TestRAGEngine:
         assert "rate limiting" in context
 
     @pytest.mark.asyncio
-    async def test_query_no_results(self, mock_settings, mock_genai, mock_storage):
+    async def test_query_no_results(self, mock_llm_model, mock_storage):
         """Test de query sin resultados."""
         mock_storage.search_episodes.return_value = []
         mock_storage.search_meta_memories.return_value = []
@@ -163,18 +158,17 @@ class TestRAGEngine:
 
     @pytest.mark.asyncio
     async def test_query_with_results(
-        self, mock_settings, mock_genai, mock_storage, sample_search_result
+        self, mock_llm_model, mock_storage, sample_search_result
     ):
         """Test de query con resultados."""
+        mock_factory, mock_model = mock_llm_model
+        
         mock_storage.search_episodes.return_value = [sample_search_result]
         
         # Mock del modelo
         mock_response = MagicMock()
         mock_response.text = "JWT fue elegido por su naturaleza stateless y escalabilidad."
-        
-        mock_model = MagicMock()
-        mock_model.generate_content_async = AsyncMock(return_value=mock_response)
-        mock_genai.GenerativeModel.return_value = mock_model
+        mock_model.generate_async = AsyncMock(return_value=mock_response)
         
         engine = RAGEngine(storage=mock_storage)
         
@@ -198,17 +192,16 @@ class TestRAGEngine:
         assert query.top_k == 3
 
     def test_query_sync(
-        self, mock_settings, mock_genai, mock_storage, sample_search_result
+        self, mock_llm_model, mock_storage, sample_search_result
     ):
         """Test de versión síncrona de query."""
+        mock_factory, mock_model = mock_llm_model
+        
         mock_storage.search_episodes.return_value = [sample_search_result]
         
         mock_response = MagicMock()
         mock_response.text = "Respuesta sobre JWT"
-        
-        mock_model = MagicMock()
-        mock_model.generate_content_async = AsyncMock(return_value=mock_response)
-        mock_genai.GenerativeModel.return_value = mock_model
+        mock_model.generate_async = AsyncMock(return_value=mock_response)
         
         engine = RAGEngine(storage=mock_storage)
         
@@ -216,7 +209,7 @@ class TestRAGEngine:
         
         assert result["context_provided"] is True
 
-    def test_get_timeline(self, mock_settings, mock_genai, mock_storage, sample_episode):
+    def test_get_timeline(self, mock_llm_model, mock_storage, sample_episode):
         """Test de obtención de timeline."""
         mock_storage.get_timeline.return_value = [sample_episode]
         
@@ -236,7 +229,7 @@ class TestRAGEngine:
             limit=10
         )
 
-    def test_get_lessons(self, mock_settings, mock_genai, mock_storage):
+    def test_get_lessons(self, mock_llm_model, mock_storage):
         """Test de obtención de lecciones."""
         mock_lessons = [
             {"lesson": "Validar algoritmos JWT", "from_task": "Auth"},
@@ -254,7 +247,7 @@ class TestRAGEngine:
             tags=["security"]
         )
 
-    def test_get_statistics(self, mock_settings, mock_genai, mock_storage):
+    def test_get_statistics(self, mock_llm_model, mock_storage):
         """Test de obtención de estadísticas."""
         mock_stats = {
             "total_episodes": 25,
@@ -298,22 +291,14 @@ class TestRAGEngineEdgeCases:
     """Tests para casos especiales del RAGEngine."""
 
     @pytest.fixture
-    def mock_settings(self):
-        """Mock de configuración."""
-        with patch("memorytwin.oraculo.rag_engine.get_settings") as mock:
-            settings = MagicMock()
-            settings.google_api_key = "test-api-key"
-            settings.llm_model = "gemini-2.0-flash"
-            mock.return_value = settings
-            yield mock
+    def mock_llm_model(self):
+        """Mock de get_llm_model factory."""
+        with patch("memorytwin.oraculo.rag_engine.get_llm_model") as mock:
+            mock_model = MagicMock()
+            mock.return_value = mock_model
+            yield mock, mock_model
 
-    @pytest.fixture
-    def mock_genai(self):
-        """Mock de Google Generative AI."""
-        with patch("memorytwin.oraculo.rag_engine.genai") as mock:
-            yield mock
-
-    def test_build_context_empty_fields(self, mock_settings, mock_genai):
+    def test_build_context_empty_fields(self, mock_llm_model):
         """Test de contexto con campos vacíos."""
         episode = Episode(
             id=uuid4(),
@@ -341,7 +326,7 @@ class TestRAGEngineEdgeCases:
         
         assert "No documentadas" in context or "Ninguna documentada" in context
 
-    def test_timeline_formatting(self, mock_settings, mock_genai):
+    def test_timeline_formatting(self, mock_llm_model):
         """Test de formato de timeline."""
         episode = Episode(
             id=uuid4(),

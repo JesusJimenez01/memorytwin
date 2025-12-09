@@ -24,6 +24,7 @@ classifiers = [
 dependencies = [
     # Core - Siempre necesarias
     "google-generativeai>=0.8.0",
+    "openai>=1.0.0",  # Para OpenRouter y otros proveedores compatibles
     "chromadb>=0.4.0",
     "sentence-transformers>=2.2.0",
     "mcp>=1.0.0",
@@ -56,16 +57,13 @@ sql = [
 ]
 
 # Proveedores LLM alternativos
-openai = [
-    "openai>=1.0.0",
-]
 anthropic = [
     "anthropic>=0.30.0",
 ]
 
 # Todas las features
 all = [
-    "memorytwin[ui,observability,sql,openai,anthropic]",
+    "memorytwin[ui,observability,sql,anthropic]",
 ]
 
 # Desarrollo

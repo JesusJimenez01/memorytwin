@@ -11,9 +11,7 @@ Ahora incluye soporte para MetaMemories (conocimiento consolidado).
 
 from typing import Optional
 
-import google.generativeai as genai
-
-from memorytwin.config import get_settings
+from memorytwin.config import get_llm_model, get_settings
 from memorytwin.models import MemoryQuery, MemorySearchResult, MetaMemory, MetaMemorySearchResult
 from memorytwin.escriba.storage import MemoryStorage
 from memorytwin.observability import trace_access_memory, _get_langfuse, _is_disabled, flush_traces
@@ -67,28 +65,12 @@ class RAGEngine:
         
         Args:
             storage: Almacenamiento de memoria (se crea uno si no se provee)
-            api_key: API key para el LLM (usa la de configuración si no se provee)
+            api_key: DEPRECATED - ya no se usa, la API key se lee de config.
         """
         self.storage = storage or MemoryStorage()
         
-        settings = get_settings()
-        self.api_key = api_key or settings.google_api_key
-        
-        if not self.api_key:
-            raise ValueError(
-                "Se requiere GOOGLE_API_KEY para el motor RAG. "
-                "Configúrala en .env o pásala como parámetro."
-            )
-        
-        # Configurar Gemini
-        genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel(
-            model_name=settings.llm_model,
-            generation_config={
-                "temperature": 0.4,  # Un poco más creativo para respuestas
-                "max_output_tokens": 2048,
-            }
-        )
+        # Usar factory centralizada (temperatura un poco más alta para respuestas creativas)
+        self.model = get_llm_model(temperature=0.4, max_output_tokens=2048)
 
     @trace_access_memory
     async def query(
@@ -281,7 +263,8 @@ class RAGEngine:
                     input={"question": question, "context_length": len(context)}
                 ).__enter__()
             
-            response = await self.model.generate_content_async(
+            # Llamar al LLM (interfaz unificada)
+            response = await self.model.generate_async(
                 [
                     {"role": "user", "parts": [ORACLE_SYSTEM_PROMPT]},
                     {"role": "model", "parts": ["Entendido. Estoy listo para responder preguntas sobre la memoria técnica del proyecto basándome únicamente en los episodios proporcionados."]},

@@ -1,93 +1,67 @@
 # Memory Twin - Instrucciones para Agentes IA
 
 ---
-## 🚨 FLUJO OBLIGATORIO PARA CADA TAREA 🚨
+## 🚨 REGLA OBLIGATORIA - LEER PRIMERO 🚨
+
+**ANTES de responder CUALQUIER pregunta técnica, DEBO ejecutar:**
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  1. CONSULTAR    →   2. PLANIFICAR   →   3. EJECUTAR   →   4. REGISTRAR  │
-│     memorias          con contexto        el plan            resultado     │
-└─────────────────────────────────────────────────────────────────┘
+get_project_context(topic="<términos relevantes de la pregunta del usuario>")
 ```
 
-### PASO 1: CONSULTAR MEMORIAS (OBLIGATORIO)
-**ANTES de responder CUALQUIER tarea técnica:**
+**NO HAY EXCEPCIONES.** Si no consulto la memoria primero, puedo:
+- Sugerir soluciones que ya fallaron
+- Ignorar decisiones de arquitectura previas
+- Repetir errores que ya resolvimos
+- Contradecir el estilo/convenciones del proyecto
 
-```
-get_project_context(topic="<términos de la tarea>", include_reasoning=true)
-```
-
-⚠️ **SI HAY WARNINGS DE ANTIPATTERNS**: 
-- DEBES leerlos antes de continuar
-- Si decides ignorarlos, JUSTIFICA por qué
-
-### PASO 2: PLANIFICAR CON CONTEXTO
-Basándote en las memorias recuperadas:
-- ¿Hay soluciones previas que puedo reutilizar?
-- ¿Hay errores previos que debo evitar?
-- ¿Qué lecciones aplican a esta tarea?
-
-### PASO 3: EJECUTAR EL PLAN
-Implementa la solución teniendo en cuenta el contexto.
-
-### PASO 4: REGISTRAR RESULTADO (OBLIGATORIO)
-**DESPUÉS de cada tarea técnica:**
-
-```
-capture_thinking(
-    thinking_text="## Tarea\n...\n## Decisiones\n...\n## Resultado\n...",
-    project_name="<proyecto>"
-)
-```
-
-Si algo FALLÓ o fue un error, también usa:
-```
-mark_episode(episode_id="<id>", is_antipattern=true)
-```
+**Mi primera acción SIEMPRE es obtener contexto del proyecto. SIEMPRE.**
 
 ---
 
 ## ¿Qué es Memory Twin?
 Sistema de memoria episódica que captura el razonamiento técnico para evitar "amnesia técnica" en proyectos.
 
-## ⚡ PROTOCOLO DE CONSULTA
+## ⚡ PROTOCOLO DE CONSULTA OBLIGATORIO
 
-### `get_project_context` - ⭐ HERRAMIENTA PRINCIPAL
-**Usar SIEMPRE al inicio de cada tarea.**
+### PASO 1: Obtener contexto (OBLIGATORIO)
+Antes de escribir CUALQUIER respuesta técnica:
 
-Priorización de resultados:
-0. ⚠️ **ANTIPATTERNS**: Advertencias de errores previos (revisar OBLIGATORIO)
-1. **META-MEMORIAS**: Conocimiento consolidado y patrones
-2. **EPISODIOS**: Decisiones individuales relevantes
+```
+get_project_context(topic="<palabras clave de la pregunta>")
+```
 
-Parámetros:
-- `topic` (recomendado): Palabras clave de la tarea
-- `include_reasoning` (opcional): Si true, incluye razonamiento completo
-- `project_name` (opcional): Filtrar por proyecto
+Esta herramienta es INTELIGENTE:
+- Si hay **pocas memorias (<20)**: devuelve TODO el contexto del proyecto
+- Si hay **muchas memorias (>=20)**: devuelve estadísticas + recientes + relevantes al topic
 
-Ejemplos:
+**Nota Importante:**
+Esta herramienta activa el mecanismo de **"Forgetting Curve"**. Al consultar memorias relevantes, incrementas su `access_count`, evitando que el sistema las "olvide" con el tiempo. ¡Consultar es reforzar!
+
+Ejemplos de consultas:
 - Usuario pregunta sobre autenticación → `get_project_context(topic="autenticación login JWT")`
 - Usuario tiene un error → `get_project_context(topic="error <tipo de error>")`
 - Usuario quiere implementar feature → `get_project_context(topic="<nombre feature>")`
+- Usuario pregunta arquitectura → `get_project_context(topic="arquitectura diseño")`
 
 ### PASO 2: Analizar resultados
-- **Si hay WARNINGS**: Leerlos ANTES de proceder
 - Si hay memorias relevantes → Incorporar ese conocimiento
-- Si no hay resultados → Proceder, pero capturar después
+- Si no hay resultados → Proceder normalmente, pero considerar capturar después
 
 ### PASO 3: Responder mencionando contexto
 - "Según memorias previas del proyecto..."
-- "⚠️ Hay un antipattern registrado sobre esto, evitaré..."
-- "No encontré decisiones previas, procedo con..."
+- "No encontré decisiones previas sobre esto, procedo con..."
+- "Esto ya se resolvió anteriormente, la solución fue..."
 
 ### Cuándo consultar (SIEMPRE que aplique):
 | Situación | Consulta obligatoria |
 |-----------|---------------------|
 | Pregunta técnica | `get_project_context(topic="<tema>")` |
 | Error/Bug | `get_project_context(topic="error <descripción>")` |
-| Nueva feature | `get_project_context(topic="<feature>")` |
-| Decisión de arquitectura | `get_project_context(topic="arquitectura", include_reasoning=true)` |
+| Nueva feature | `get_project_context(topic="<feature>")` + `get_lessons()` |
+| Decisión de arquitectura | `query_memory("<pregunta>")` |
 | Primera vez en proyecto | `onboard_project("<ruta>")` |
+| Elegir librería/enfoque | `get_project_context(topic="<opciones>")` |
 
 ## Herramientas MCP Disponibles
 
@@ -103,13 +77,17 @@ Esta herramienta activa el mecanismo de **"Forgetting Curve"**. Al consultar mem
 
 Parámetros:
 - `topic` (opcional): Tema para búsqueda semántica
-- `include_reasoning` (opcional): Incluir raw_thinking completo
 - `project_name` (opcional): Filtrar por proyecto
 
 ### `capture_thinking` - 🔴 CAPTURA OBLIGATORIA
 **DEBO usar esta herramienta AUTOMÁTICAMENTE después de cualquier tarea técnica.**
 
 **IMPORTANTE:** Esta es la **ÚNICA** forma de persistir conocimiento. Si no la uso, el trabajo se pierde.
+
+**💡 TIP:** Hay 3 formas de capturar, elige la más conveniente:
+1. `capture_quick` - ⚡ La más rápida (solo what + why)
+2. `capture_decision` - 🎯 Para decisiones (task + decision + reasoning)
+3. `capture_thinking` - 📝 Para texto libre extenso
 
 #### ✅ CAPTURAR SIEMPRE (sin excepción):
 - Resolví un bug o error (cualquiera, no importa si es "simple")
@@ -137,6 +115,56 @@ Parámetros:
 - `code_changes` (opcional): Cambios de código asociados
 - `source_assistant` (opcional): copilot, claude, cursor, etc.
 - `project_name` (opcional): Nombre del proyecto
+
+### `capture_decision` - 🎯 CAPTURA ESTRUCTURADA (PREFERIDA)
+**Forma más conveniente de capturar decisiones técnicas.**
+
+Usar cuando tengas los datos organizados en campos separados. Más cómodo que escribir texto libre.
+
+Parámetros:
+- `task` (requerido): Descripción breve de la tarea o problema
+- `decision` (requerido): La decisión o solución tomada
+- `reasoning` (requerido): Por qué se tomó esta decisión
+- `alternatives` (opcional): Array de alternativas consideradas
+- `lesson` (opcional): Lección aprendida para el futuro
+- `context` (opcional): Contexto adicional
+- `project_name` (opcional): Nombre del proyecto
+
+**Ejemplo:**
+```
+capture_decision(
+    task="Elegir base de datos",
+    decision="PostgreSQL",
+    alternatives=["MongoDB", "MySQL"],
+    reasoning="Necesitamos ACID y queries complejas",
+    lesson="Para datos relacionales con transacciones, SQL > NoSQL"
+)
+```
+
+### `capture_quick` - ⚡ CAPTURA RÁPIDA (MÍNIMO ESFUERZO)
+**La forma más simple de capturar. Solo 2 campos requeridos.**
+
+Usar para capturas rápidas sin mucho detalle. Ideal cuando tienes prisa.
+
+Parámetros:
+- `what` (requerido): ¿Qué hiciste? (acción realizada)
+- `why` (requerido): ¿Por qué lo hiciste? (razón)
+- `lesson` (opcional pero recomendado): Lección aprendida
+- `project_name` (opcional): Nombre del proyecto
+
+**Ejemplos:**
+```
+capture_quick(
+    what="Añadí retry logic al cliente HTTP",
+    why="Las llamadas a la API fallaban intermitentemente"
+)
+
+capture_quick(
+    what="Cambié de axios a fetch",
+    why="Reducir dependencias, fetch nativo es suficiente",
+    lesson="Evaluar siempre si una dependencia es realmente necesaria"
+)
+```
 
 ### `query_memory` - Consultar memorias con RAG
 Usar cuando:
@@ -189,27 +217,6 @@ Obtiene estadísticas de la base de memoria: total de episodios, distribución p
 Parámetros:
 - `project_name` (opcional): Filtrar por proyecto
 
-### `mark_episode` - 🚨 Marcar episodios como antipattern o crítico
-**Usar SIEMPRE que algo haya fallado o sea un error a evitar.**
-
-Permite marcar episodios existentes como:
-- **Antipattern**: Errores, fallos, enfoques que NO funcionaron
-- **Critical**: Decisiones importantes que deben preservarse siempre
-
-También permite marcar episodios como superseded (reemplazados por uno nuevo).
-
-Parámetros:
-- `episode_id` (requerido): UUID del episodio a marcar
-- `is_antipattern` (opcional): true si es un error a evitar
-- `is_critical` (opcional): true si es conocimiento crítico
-- `superseded_by` (opcional): UUID del episodio que lo reemplaza
-- `deprecation_reason` (opcional): Razón por la que ya no aplica
-
-Ejemplo de uso después de un error:
-```
-mark_episode(episode_id="abc-123", is_antipattern=true)
-```
-
 ### `onboard_project` - Onboarding de proyecto existente
 Usar cuando:
 - ✅ Es la primera vez que trabajo en este proyecto
@@ -226,25 +233,6 @@ Genera automáticamente un episodio con:
 Parámetros:
 - `project_path` (requerido): Ruta absoluta al proyecto
 - `project_name` (opcional): Nombre del proyecto (se detecta automáticamente)
-
-### `check_consolidation_status` - Verificar necesidad de consolidación
-Usar para:
-- Determinar si hay suficientes episodios para consolidar
-- Ver estadísticas de episodios con alto access_count
-- Decidir si ejecutar `consolidate_memories`
-
-Parámetros:
-- `project_name` (opcional): Proyecto a verificar
-
-### `consolidate_memories` - Consolidar episodios en meta-memorias
-Usar cuando:
-- El sistema indica que hay episodios sin consolidar
-- Hay muchos episodios (>20) en un proyecto
-- Quieres crear conocimiento consolidado de patrones recurrentes
-
-Parámetros:
-- `project_name` (requerido): Proyecto a consolidar
-- `min_cluster_size` (opcional): Mínimo de episodios por cluster (default: 3)
 
 ## Flujo de Trabajo OBLIGATORIO
 

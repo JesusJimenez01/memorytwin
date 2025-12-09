@@ -12,7 +12,6 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.markdown import Markdown
 
-from memorytwin.config import get_settings
 from memorytwin.oraculo.rag_engine import RAGEngine
 
 console = Console()

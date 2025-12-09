@@ -23,21 +23,12 @@ class TestThoughtProcessor:
     """Tests para ThoughtProcessor."""
 
     @pytest.fixture
-    def mock_settings(self):
-        """Mock de configuración."""
-        with patch("memorytwin.escriba.processor.get_settings") as mock:
-            settings = MagicMock()
-            settings.google_api_key = "test-api-key"
-            settings.llm_model = "gemini-2.0-flash"
-            settings.llm_temperature = 0.3
-            mock.return_value = settings
-            yield mock
-
-    @pytest.fixture
-    def mock_genai(self):
-        """Mock de Google Generative AI."""
-        with patch("memorytwin.escriba.processor.genai") as mock:
-            yield mock
+    def mock_llm_model(self):
+        """Mock de get_llm_model factory."""
+        with patch("memorytwin.escriba.processor.get_llm_model") as mock:
+            mock_model = MagicMock()
+            mock.return_value = mock_model
+            yield mock, mock_model
 
     @pytest.fixture
     def sample_input(self):
@@ -70,31 +61,34 @@ class TestThoughtProcessor:
             "lessons_learned": ["Validar algoritmo JWT"]
         }
 
-    def test_processor_init_with_api_key(self, mock_settings, mock_genai):
-        """Test de inicialización con API key."""
-        processor = ThoughtProcessor(api_key="custom-key")
+    def test_processor_init_with_factory(self, mock_llm_model):
+        """Test de inicialización usando factory."""
+        mock_factory, mock_model = mock_llm_model
         
-        mock_genai.configure.assert_called_once_with(api_key="custom-key")
-        assert processor.api_key == "custom-key"
-
-    def test_processor_init_from_settings(self, mock_settings, mock_genai):
-        """Test de inicialización desde configuración."""
         processor = ThoughtProcessor()
         
-        mock_genai.configure.assert_called_once_with(api_key="test-api-key")
-        assert processor.api_key == "test-api-key"
+        # Verifica que se llamó a la factory con JSON mime type
+        mock_factory.assert_called_once_with(response_mime_type="application/json")
+        assert processor.model == mock_model
 
-    def test_processor_init_no_api_key_raises(self, mock_genai):
-        """Test que falla sin API key."""
-        with patch("memorytwin.escriba.processor.get_settings") as mock:
-            settings = MagicMock()
-            settings.google_api_key = None
-            mock.return_value = settings
+    def test_processor_init_api_key_deprecated(self, mock_llm_model):
+        """Test que api_key está deprecated pero no rompe."""
+        mock_factory, mock_model = mock_llm_model
+        
+        # No debería fallar aunque se pase api_key (deprecated)
+        processor = ThoughtProcessor(api_key="ignored-key")
+        
+        assert processor.model == mock_model
+
+    def test_processor_init_no_api_key_raises(self):
+        """Test que falla sin API key en config."""
+        with patch("memorytwin.escriba.processor.get_llm_model") as mock:
+            mock.side_effect = ValueError("Se requiere GOOGLE_API_KEY")
             
             with pytest.raises(ValueError, match="Se requiere GOOGLE_API_KEY"):
                 ThoughtProcessor()
 
-    def test_build_user_prompt_minimal(self, mock_settings, mock_genai):
+    def test_build_user_prompt_minimal(self, mock_llm_model):
         """Test de construcción de prompt mínimo."""
         processor = ThoughtProcessor()
         
@@ -110,7 +104,7 @@ class TestThoughtProcessor:
         assert "PROMPT ORIGINAL" not in prompt
         assert "CAMBIOS DE CÓDIGO" not in prompt
 
-    def test_build_user_prompt_full(self, mock_settings, mock_genai, sample_input):
+    def test_build_user_prompt_full(self, mock_llm_model, sample_input):
         """Test de construcción de prompt completo."""
         processor = ThoughtProcessor()
         
@@ -123,7 +117,7 @@ class TestThoughtProcessor:
         assert "## CAMBIOS DE CÓDIGO:" in prompt
         assert "def create_token" in prompt
 
-    def test_build_episode_from_data(self, mock_settings, mock_genai, sample_llm_response):
+    def test_build_episode_from_data(self, mock_llm_model, sample_llm_response):
         """Test de construcción de Episode desde datos estructurados."""
         processor = ThoughtProcessor()
         
@@ -143,7 +137,7 @@ class TestThoughtProcessor:
         assert len(episode.reasoning_trace.alternatives_considered) == 1
         assert episode.reasoning_trace.confidence_level == 0.85
 
-    def test_build_episode_invalid_type_defaults(self, mock_settings, mock_genai):
+    def test_build_episode_invalid_type_defaults(self, mock_llm_model):
         """Test que tipo inválido usa default."""
         processor = ThoughtProcessor()
         
@@ -156,7 +150,7 @@ class TestThoughtProcessor:
         
         assert episode.episode_type == EpisodeType.DECISION
 
-    def test_build_episode_missing_fields(self, mock_settings, mock_genai):
+    def test_build_episode_missing_fields(self, mock_llm_model):
         """Test con campos faltantes usa defaults."""
         processor = ThoughtProcessor()
         
@@ -171,18 +165,17 @@ class TestThoughtProcessor:
 
     @pytest.mark.asyncio
     async def test_process_thought_success(
-        self, mock_settings, mock_genai, sample_input, sample_llm_response
+        self, mock_llm_model, sample_input, sample_llm_response
     ):
         """Test de procesamiento exitoso."""
         import json
         
+        mock_factory, mock_model = mock_llm_model
+        
         # Configurar mock del modelo
         mock_response = MagicMock()
         mock_response.text = json.dumps(sample_llm_response)
-        
-        mock_model = MagicMock()
-        mock_model.generate_content_async = AsyncMock(return_value=mock_response)
-        mock_genai.GenerativeModel.return_value = mock_model
+        mock_model.generate_async = AsyncMock(return_value=mock_response)
         
         processor = ThoughtProcessor()
         
@@ -194,22 +187,21 @@ class TestThoughtProcessor:
         
         assert episode.task == "Implementar autenticación JWT"
         assert episode.project_name == "test-project"
-        mock_model.generate_content_async.assert_called_once()
+        mock_model.generate_async.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_process_thought_extracts_json_from_text(
-        self, mock_settings, mock_genai, sample_input, sample_llm_response
+        self, mock_llm_model, sample_input, sample_llm_response
     ):
         """Test que extrae JSON de texto con contenido adicional."""
         import json
         
+        mock_factory, mock_model = mock_llm_model
+        
         # Respuesta con texto adicional
         mock_response = MagicMock()
         mock_response.text = f"Aquí está el resultado:\n{json.dumps(sample_llm_response)}\nFin."
-        
-        mock_model = MagicMock()
-        mock_model.generate_content_async = AsyncMock(return_value=mock_response)
-        mock_genai.GenerativeModel.return_value = mock_model
+        mock_model.generate_async = AsyncMock(return_value=mock_response)
         
         processor = ThoughtProcessor()
         
@@ -223,15 +215,14 @@ class TestThoughtProcessor:
 
     @pytest.mark.asyncio
     async def test_process_thought_invalid_json_raises(
-        self, mock_settings, mock_genai, sample_input
+        self, mock_llm_model, sample_input
     ):
         """Test que JSON inválido lanza error."""
+        mock_factory, mock_model = mock_llm_model
+        
         mock_response = MagicMock()
         mock_response.text = "esto no es json válido sin llaves"
-        
-        mock_model = MagicMock()
-        mock_model.generate_content_async = AsyncMock(return_value=mock_response)
-        mock_genai.GenerativeModel.return_value = mock_model
+        mock_model.generate_async = AsyncMock(return_value=mock_response)
         
         processor = ThoughtProcessor()
         
@@ -239,16 +230,15 @@ class TestThoughtProcessor:
         with pytest.raises((ValueError, Exception)):
             await processor.process_thought(sample_input)
 
-    def test_process_thought_sync(self, mock_settings, mock_genai, sample_input, sample_llm_response):
+    def test_process_thought_sync(self, mock_llm_model, sample_input, sample_llm_response):
         """Test de versión síncrona."""
         import json
         
+        mock_factory, mock_model = mock_llm_model
+        
         mock_response = MagicMock()
         mock_response.text = json.dumps(sample_llm_response)
-        
-        mock_model = MagicMock()
-        mock_model.generate_content_async = AsyncMock(return_value=mock_response)
-        mock_genai.GenerativeModel.return_value = mock_model
+        mock_model.generate_async = AsyncMock(return_value=mock_response)
         
         processor = ThoughtProcessor()
         

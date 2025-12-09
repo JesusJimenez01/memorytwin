@@ -444,6 +444,231 @@ class TestMCPServerCaptureThinking:
         assert "success" in content
 
 
+class TestMCPServerCaptureDecision:
+    """Tests para capture_decision del servidor MCP."""
+
+    @patch("memorytwin.mcp_server.server.Server")
+    @patch("memorytwin.mcp_server.server.ThoughtProcessor")
+    @patch("memorytwin.mcp_server.server.MemoryStorage")
+    @patch("memorytwin.mcp_server.server.RAGEngine")
+    @pytest.mark.asyncio
+    async def test_capture_decision_success(
+        self,
+        mock_rag_class,
+        mock_storage_class,
+        mock_processor_class,
+        mock_server_class
+    ):
+        """Test de captura exitosa de decisión estructurada."""
+        from memorytwin.mcp_server.server import MemoryTwinMCPServer
+        
+        mock_server = MagicMock()
+        mock_server_class.return_value = mock_server
+        
+        mock_storage = MagicMock()
+        mock_storage.store_episode.return_value = "decision-episode-id"
+        mock_storage_class.return_value = mock_storage
+        
+        sample_episode = Episode(
+            id=uuid4(),
+            task="Elegir base de datos",
+            context="Test context",
+            reasoning_trace=ReasoningTrace(raw_thinking="test"),
+            solution="PostgreSQL",
+            solution_summary="Se eligió PostgreSQL",
+            episode_type=EpisodeType.DECISION,
+            tags=["database", "postgresql"],
+            lessons_learned=["Para datos relacionales, SQL es mejor"],
+            project_name="test"
+        )
+        
+        mock_processor = MagicMock()
+        mock_processor.process_thought = AsyncMock(return_value=sample_episode)
+        mock_processor_class.return_value = mock_processor
+        
+        mcp_server = MemoryTwinMCPServer()
+        mcp_server._lazy_init()
+        
+        result = await mcp_server._capture_decision({
+            "task": "Elegir base de datos para el proyecto",
+            "decision": "PostgreSQL",
+            "alternatives": ["MongoDB", "MySQL", "SQLite"],
+            "reasoning": "Necesitamos transacciones ACID y queries complejas",
+            "lesson": "Para datos relacionales con transacciones, SQL > NoSQL",
+            "project_name": "test-project",
+            "source_assistant": "copilot"
+        })
+        
+        assert result.isError is False
+        content = result.content[0].text
+        assert "decision-episode-id" in content
+        assert "success" in content
+        assert "PostgreSQL" in content
+
+    @patch("memorytwin.mcp_server.server.Server")
+    @patch("memorytwin.mcp_server.server.ThoughtProcessor")
+    @patch("memorytwin.mcp_server.server.MemoryStorage")
+    @patch("memorytwin.mcp_server.server.RAGEngine")
+    @pytest.mark.asyncio
+    async def test_capture_decision_minimal(
+        self,
+        mock_rag_class,
+        mock_storage_class,
+        mock_processor_class,
+        mock_server_class
+    ):
+        """Test de captura de decisión con campos mínimos requeridos."""
+        from memorytwin.mcp_server.server import MemoryTwinMCPServer
+        
+        mock_server = MagicMock()
+        mock_server_class.return_value = mock_server
+        
+        mock_storage = MagicMock()
+        mock_storage.store_episode.return_value = "minimal-decision-id"
+        mock_storage_class.return_value = mock_storage
+        
+        sample_episode = Episode(
+            id=uuid4(),
+            task="Test task",
+            context="",
+            reasoning_trace=ReasoningTrace(raw_thinking="test"),
+            solution="test",
+            solution_summary="test",
+            episode_type=EpisodeType.DECISION,
+            tags=[],
+            lessons_learned=[],
+            project_name="default"
+        )
+        
+        mock_processor = MagicMock()
+        mock_processor.process_thought = AsyncMock(return_value=sample_episode)
+        mock_processor_class.return_value = mock_processor
+        
+        mcp_server = MemoryTwinMCPServer()
+        mcp_server._lazy_init()
+        
+        # Solo campos requeridos: task, decision, reasoning
+        result = await mcp_server._capture_decision({
+            "task": "Elegir formato de config",
+            "decision": "YAML",
+            "reasoning": "Más legible que JSON"
+        })
+        
+        assert result.isError is False
+        content = result.content[0].text
+        assert "minimal-decision-id" in content
+
+
+class TestMCPServerCaptureQuick:
+    """Tests para capture_quick del servidor MCP."""
+
+    @patch("memorytwin.mcp_server.server.Server")
+    @patch("memorytwin.mcp_server.server.ThoughtProcessor")
+    @patch("memorytwin.mcp_server.server.MemoryStorage")
+    @patch("memorytwin.mcp_server.server.RAGEngine")
+    @pytest.mark.asyncio
+    async def test_capture_quick_success(
+        self,
+        mock_rag_class,
+        mock_storage_class,
+        mock_processor_class,
+        mock_server_class
+    ):
+        """Test de captura rápida exitosa."""
+        from memorytwin.mcp_server.server import MemoryTwinMCPServer
+        
+        mock_server = MagicMock()
+        mock_server_class.return_value = mock_server
+        
+        mock_storage = MagicMock()
+        mock_storage.store_episode.return_value = "quick-episode-id"
+        mock_storage_class.return_value = mock_storage
+        
+        sample_episode = Episode(
+            id=uuid4(),
+            task="Añadí retry logic",
+            context="",
+            reasoning_trace=ReasoningTrace(raw_thinking="test"),
+            solution="Retry con exponential backoff",
+            solution_summary="Se añadió retry",
+            episode_type=EpisodeType.BUG_FIX,
+            tags=["http", "retry"],
+            lessons_learned=["Siempre usar retry en llamadas externas"],
+            project_name="test"
+        )
+        
+        mock_processor = MagicMock()
+        mock_processor.process_thought = AsyncMock(return_value=sample_episode)
+        mock_processor_class.return_value = mock_processor
+        
+        mcp_server = MemoryTwinMCPServer()
+        mcp_server._lazy_init()
+        
+        result = await mcp_server._capture_quick({
+            "what": "Añadí retry logic al cliente HTTP",
+            "why": "Las llamadas a la API fallaban intermitentemente",
+            "lesson": "Siempre usar retry en llamadas externas",
+            "project_name": "test-project"
+        })
+        
+        assert result.isError is False
+        content = result.content[0].text
+        assert "quick-episode-id" in content
+        assert "success" in content
+
+    @patch("memorytwin.mcp_server.server.Server")
+    @patch("memorytwin.mcp_server.server.ThoughtProcessor")
+    @patch("memorytwin.mcp_server.server.MemoryStorage")
+    @patch("memorytwin.mcp_server.server.RAGEngine")
+    @pytest.mark.asyncio
+    async def test_capture_quick_minimal(
+        self,
+        mock_rag_class,
+        mock_storage_class,
+        mock_processor_class,
+        mock_server_class
+    ):
+        """Test de captura rápida con campos mínimos."""
+        from memorytwin.mcp_server.server import MemoryTwinMCPServer
+        
+        mock_server = MagicMock()
+        mock_server_class.return_value = mock_server
+        
+        mock_storage = MagicMock()
+        mock_storage.store_episode.return_value = "minimal-quick-id"
+        mock_storage_class.return_value = mock_storage
+        
+        sample_episode = Episode(
+            id=uuid4(),
+            task="Test",
+            context="",
+            reasoning_trace=ReasoningTrace(raw_thinking="test"),
+            solution="test",
+            solution_summary="test",
+            episode_type=EpisodeType.DECISION,
+            tags=[],
+            lessons_learned=[],
+            project_name="default"
+        )
+        
+        mock_processor = MagicMock()
+        mock_processor.process_thought = AsyncMock(return_value=sample_episode)
+        mock_processor_class.return_value = mock_processor
+        
+        mcp_server = MemoryTwinMCPServer()
+        mcp_server._lazy_init()
+        
+        # Solo campos requeridos: what, why
+        result = await mcp_server._capture_quick({
+            "what": "Cambié de axios a fetch",
+            "why": "Reducir dependencias"
+        })
+        
+        assert result.isError is False
+        content = result.content[0].text
+        assert "minimal-quick-id" in content
+
+
 class TestMCPServerQueryMemory:
     """Tests para query_memory del servidor MCP."""
 

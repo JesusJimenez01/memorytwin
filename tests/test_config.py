@@ -15,20 +15,37 @@ class TestSettings:
     """Tests para la clase Settings."""
 
     def test_settings_defaults(self):
-        """Test de valores por defecto."""
+        """Test de valores por defecto cuando no hay .env."""
         from memorytwin.config import Settings
         
-        # Crear settings con valores por defecto
-        settings = Settings()
+        # Guardar y limpiar las variables de entorno que afectan al test
+        env_vars_to_clear = [
+            'LLM_PROVIDER', 'LLM_MODEL', 'LLM_TEMPERATURE',
+            'GOOGLE_API_KEY', 'OPENROUTER_API_KEY',
+            'MCP_SERVER_HOST', 'MCP_SERVER_PORT',
+            'GRADIO_SERVER_PORT', 'GRADIO_SHARE', 'EMBEDDING_MODEL'
+        ]
+        saved_env = {k: os.environ.pop(k, None) for k in env_vars_to_clear}
         
-        assert settings.mcp_server_host == "localhost"
-        assert settings.mcp_server_port == 8765
-        assert settings.gradio_server_port == 7860
-        assert settings.gradio_share is False
-        assert settings.llm_provider == "google"
-        assert settings.llm_model == "gemini-2.0-flash"
-        assert settings.llm_temperature == 0.3
-        assert settings.embedding_model == "all-MiniLM-L6-v2"
+        try:
+            # Crear settings sin variables de entorno
+            settings = Settings(
+                _env_file=None  # No cargar ningún .env
+            )
+            
+            assert settings.mcp_server_host == "localhost"
+            assert settings.mcp_server_port == 8765
+            assert settings.gradio_server_port == 7860
+            assert settings.gradio_share is False
+            assert settings.llm_provider == "google"
+            assert settings.llm_model == "gemini-2.0-flash"
+            assert settings.llm_temperature == 0.3
+            assert settings.embedding_model == "all-MiniLM-L6-v2"
+        finally:
+            # Restaurar variables de entorno
+            for k, v in saved_env.items():
+                if v is not None:
+                    os.environ[k] = v
 
     def test_settings_chroma_default(self):
         """Test de ruta por defecto de ChromaDB."""

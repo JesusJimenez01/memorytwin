@@ -13,18 +13,21 @@ Configuración via .env:
   - LANGFUSE_HOST (opcional)
 """
 
+import logging
 import os
 import sys
 from functools import wraps
-from dotenv import load_dotenv
+
+# Silenciar warnings molestos de Langfuse ("Calling end() on an ended span")
+logging.getLogger("langfuse").setLevel(logging.ERROR)
+
+# Importar config primero para cargar .env
+from memorytwin.config import get_settings  # noqa: F401 - asegura que .env esté cargado
 
 try:
     from langfuse import Langfuse
 except ImportError:
     Langfuse = None
-
-# Cargar variables de entorno
-load_dotenv()
 
 __all__ = ["trace_store_memory", "trace_access_memory", "trace_consolidation", "flush_traces"]
 

@@ -4,7 +4,14 @@ CLI del Escriba - Interfaz de línea de comandos
 """
 
 import argparse
+import logging
 import sys
+import warnings
+
+# Silenciar warnings molestos ANTES de cualquier import
+logging.getLogger("langfuse").setLevel(logging.CRITICAL)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+warnings.filterwarnings("ignore", message=".*ended span.*")
 
 from rich.console import Console
 from rich.panel import Panel
@@ -367,6 +374,15 @@ def handle_consolidate(args):
         raise
 
 
+def handle_mcp(args):
+    """Iniciar el servidor MCP."""
+    import asyncio
+    from memorytwin.mcp_server.server import _async_main
+    
+    console.print("[cyan]Iniciando servidor MCP...[/cyan]")
+    asyncio.run(_async_main())
+
+
 def handle_setup(args):
     """Configurar Memory Twin en un proyecto."""
     import json
@@ -387,21 +403,27 @@ def handle_setup(args):
         border_style="cyan"
     ))
     
-    # Detectar ruta de Python del entorno actual
-    python_exe = sys.executable
-    
-    # Determinar la mejor forma de invocar el MCP server
-    # Priorizar 'uv' si está disponible (más moderno y rápido)
+    # Detectar la mejor forma de invocar el MCP server
+    # Orden de prioridad: mt en PATH (absoluto) > uvx > python -m
+    mt_path = shutil.which("mt")
     uv_available = shutil.which("uv") is not None
     
-    if uv_available:
-        # Usar uvx para ejecutar sin necesidad de activar entorno
+    if mt_path:
+        # Opción 1: mt mcp (usando ruta absoluta para robustez)
+        mcp_command = mt_path
+        mcp_args = ["mcp"]
+        install_method = "mt"
+    elif uv_available:
+        # Opción 2: uvx (descarga automáticamente si no está instalado)
         mcp_command = "uvx"
-        mcp_args = ["--from", "memorytwin", "memorytwin-mcp"]
+        mcp_args = ["--from", "memorytwin", "mt", "mcp"]
+        install_method = "uvx"
     else:
-        # Usar el Python del entorno actual
+        # Opción 3: Usar Python del entorno actual
+        python_exe = sys.executable
         mcp_command = python_exe
-        mcp_args = ["-m", "memorytwin.mcp_server.server"]
+        mcp_args = ["-m", "memorytwin.escriba.cli", "mcp"]
+        install_method = "python"
     
     # Contenido de las instrucciones para Copilot
     instructions_content = '''# Memory Twin - Instrucciones para Agentes IA
@@ -490,6 +512,11 @@ Parámetros:
 
 **IMPORTANTE:** Esta es la **ÚNICA** forma de persistir conocimiento. Si no la uso, el trabajo se pierde.
 
+**💡 TIP:** Hay 3 formas de capturar, elige la más conveniente:
+1. `capture_quick` - ⚡ La más rápida (solo what + why)
+2. `capture_decision` - 🎯 Para decisiones (task + decision + reasoning)
+3. `capture_thinking` - 📝 Para texto libre extenso
+
 #### ✅ CAPTURAR SIEMPRE (sin excepción):
 - Resolví un bug o error (cualquiera, no importa si es "simple")
 - Tomé una decisión técnica (librería, patrón, enfoque)
@@ -516,6 +543,56 @@ Parámetros:
 - `code_changes` (opcional): Cambios de código asociados
 - `source_assistant` (opcional): copilot, claude, cursor, etc.
 - `project_name` (opcional): Nombre del proyecto
+
+### `capture_decision` - 🎯 CAPTURA ESTRUCTURADA (PREFERIDA)
+**Forma más conveniente de capturar decisiones técnicas.**
+
+Usar cuando tengas los datos organizados en campos separados. Más cómodo que escribir texto libre.
+
+Parámetros:
+- `task` (requerido): Descripción breve de la tarea o problema
+- `decision` (requerido): La decisión o solución tomada
+- `reasoning` (requerido): Por qué se tomó esta decisión
+- `alternatives` (opcional): Array de alternativas consideradas
+- `lesson` (opcional): Lección aprendida para el futuro
+- `context` (opcional): Contexto adicional
+- `project_name` (opcional): Nombre del proyecto
+
+**Ejemplo:**
+```
+capture_decision(
+    task="Elegir base de datos",
+    decision="PostgreSQL",
+    alternatives=["MongoDB", "MySQL"],
+    reasoning="Necesitamos ACID y queries complejas",
+    lesson="Para datos relacionales con transacciones, SQL > NoSQL"
+)
+```
+
+### `capture_quick` - ⚡ CAPTURA RÁPIDA (MÍNIMO ESFUERZO)
+**La forma más simple de capturar. Solo 2 campos requeridos.**
+
+Usar para capturas rápidas sin mucho detalle. Ideal cuando tienes prisa.
+
+Parámetros:
+- `what` (requerido): ¿Qué hiciste? (acción realizada)
+- `why` (requerido): ¿Por qué lo hiciste? (razón)
+- `lesson` (opcional pero recomendado): Lección aprendida
+- `project_name` (opcional): Nombre del proyecto
+
+**Ejemplos:**
+```
+capture_quick(
+    what="Añadí retry logic al cliente HTTP",
+    why="Las llamadas a la API fallaban intermitentemente"
+)
+
+capture_quick(
+    what="Cambié de axios a fetch",
+    why="Reducir dependencias, fetch nativo es suficiente",
+    lesson="Evaluar siempre si una dependencia es realmente necesaria"
+)
+```
 
 ### `query_memory` - Consultar memorias con RAG
 Usar cuando:
@@ -656,10 +733,11 @@ capture_thinking(
     
     # Configuración MCP para VS Code - usar comando detectado
     mcp_config = {
-        "mcpServers": {
+        "servers": {
             "memorytwin": {
                 "command": mcp_command,
-                "args": mcp_args
+                "args": mcp_args,
+                "type": "stdio"
             }
         }
     }
@@ -692,29 +770,68 @@ capture_thinking(
 # ============================
 # Copy this file to .env and fill in your API keys
 
-# Required: Google Gemini API Key
-# Get one at: https://aistudio.google.com/apikey
+# =============================================================================
+# LLM PROVIDER - Choose ONE of the options below
+# =============================================================================
+
+# Option A: Google Gemini (default)
+# Get your key at: https://aistudio.google.com/apikey
 GOOGLE_API_KEY=your_google_api_key_here
+LLM_PROVIDER=google
+LLM_MODEL=gemini-2.0-flash
+
+# Option B: OpenRouter (access to many free models)
+# Get your key at: https://openrouter.ai/keys
+# OPENROUTER_API_KEY=your_openrouter_key_here
+# LLM_PROVIDER=openrouter
+# LLM_MODEL=amazon/nova-2-lite-v1:free
+
+# Free models on OpenRouter (updated Dec 2025):
+# - amazon/nova-2-lite-v1:free (1M context, fast)
+# - qwen/qwen3-coder:free (262K context, great for code)
+# - tngtech/deepseek-r1t-chimera:free (164K context, reasoning)
+
+# =============================================================================
+# OPTIONAL SETTINGS
+# =============================================================================
+
+# LLM Temperature (0.0 = deterministic, 1.0 = creative)
+# LLM_TEMPERATURE=0.3
+
+# Observability (Langfuse)
+# LANGFUSE_PUBLIC_KEY=pk-lf-...
+# LANGFUSE_SECRET_KEY=sk-lf-...
+# LANGFUSE_HOST=https://cloud.langfuse.com
+
+# Gradio UI
+# GRADIO_SERVER_PORT=7860
+# GRADIO_SHARE=false
 
 # Storage Configuration (defaults are fine for local use)
 # CHROMA_PERSIST_DIR=./data/chroma
 # SQLITE_DB_PATH=./data/memory.db
-
-# Optional: Alternative LLM providers
-# OPENAI_API_KEY=your_openai_key
-# ANTHROPIC_API_KEY=your_anthropic_key
 """
         env_path.write_text(env_content, encoding="utf-8")
         files_created.append(".env")
     
-    # Asegurar que .env está en .gitignore
+    # Asegurar que .env y data/ están en .gitignore
     gitignore_path = project_path / ".gitignore"
     gitignore_updated = False
     if gitignore_path.exists():
         gitignore_content = gitignore_path.read_text(encoding="utf-8")
+        new_entries = []
+        
         if ".env" not in gitignore_content:
+            new_entries.append(".env")
+        
+        if "data/" not in gitignore_content:
+            new_entries.append("data/")
+            
+        if new_entries:
             with open(gitignore_path, "a", encoding="utf-8") as f:
-                f.write("\n# Memory Twin\n.env\ndata/\n")
+                f.write("\n# Memory Twin\n")
+                for entry in new_entries:
+                    f.write(f"{entry}\n")
             gitignore_updated = True
             files_updated.append(".gitignore")
     else:
@@ -725,20 +842,35 @@ GOOGLE_API_KEY=your_google_api_key_here
     files_list = "\n".join(f"  • [cyan]{f}[/cyan]" for f in files_created)
     updated_list = "\n".join(f"  • [yellow]{f}[/yellow]" for f in files_updated) if files_updated else ""
     
-    mcp_method = "uvx (recomendado)" if uv_available else f"Python: {python_exe}"
+    # Mensaje según método de instalación
+    if install_method == "mt":
+        mcp_info = "[green]mt mcp[/green] (simple y universal)"
+        portability_note = ""
+    elif install_method == "uvx":
+        mcp_info = "[green]uvx[/green] (universal)"
+        portability_note = ""
+    else:
+        mcp_info = f"[yellow]Python específico[/yellow]"
+        portability_note = """
+[yellow]⚠️ Nota:[/yellow] La configuración usa la ruta de tu Python actual.
+   Para una configuración más portable, asegúrate de que 'mt' esté en PATH.
+"""
     
     next_steps = """
 [bold]Próximos pasos:[/bold]
-  1. Edita [cyan].env[/cyan] y añade tu GOOGLE_API_KEY
-  2. Reinicia VS Code para cargar la configuración MCP
-  3. ¡Listo! Copilot usará Memory Twin automáticamente
+  1. Edita [cyan].env[/cyan] y configura tu LLM (Gemini u OpenRouter)
+  2. Reinicia VS Code (F1 → "Developer: Reload Window")
+  3. Verifica en MCP: List Servers que memorytwin está conectado
+  4. ¡Listo! Copilot usará Memory Twin automáticamente
 """
     
     result_text = f"[bold green]✓ Memory Twin configurado![/bold green]\n\n"
     result_text += f"[bold]Archivos creados:[/bold]\n{files_list}\n"
     if updated_list:
         result_text += f"\n[bold]Archivos actualizados:[/bold]\n{updated_list}\n"
-    result_text += f"\n[bold]MCP Server:[/bold] {mcp_method}\n"
+    result_text += f"\n[bold]MCP Server:[/bold] {mcp_info}\n"
+    if portability_note:
+        result_text += portability_note
     result_text += next_steps
     
     console.print(Panel(
@@ -879,6 +1011,12 @@ def main():
         "consolidate",
         help="Consolidar episodios relacionados en meta-memorias"
     )
+    
+    # Comando: mcp (lanzar servidor MCP)
+    mcp_parser = subparsers.add_parser(
+        "mcp",
+        help="Iniciar el servidor MCP para VS Code/Copilot"
+    )
     consolidate_parser.add_argument(
         "--project", "-p",
         required=True,
@@ -903,24 +1041,27 @@ def main():
         return
         
     try:
-        if args.command == "capture":
-            handle_capture(args)
-        elif args.command == "stats":
-            handle_stats(args)
-        elif args.command == "search":
-            handle_search(args)
-        elif args.command == "query":
-            handle_query(args)
-        elif args.command == "lessons":
-            handle_lessons(args)
-        elif args.command == "setup":
-            handle_setup(args)
-        elif args.command == "onboard":
-            handle_onboard(args)
-        elif args.command == "health-check":
-            handle_health_check(args)
-        elif args.command == "consolidate":
-            handle_consolidate(args)
+        match args.command:
+            case "capture":
+                handle_capture(args)
+            case "stats":
+                handle_stats(args)
+            case "search":
+                handle_search(args)
+            case "query":
+                handle_query(args)
+            case "lessons":
+                handle_lessons(args)
+            case "setup":
+                handle_setup(args)
+            case "onboard":
+                handle_onboard(args)
+            case "health-check":
+                handle_health_check(args)
+            case "consolidate":
+                handle_consolidate(args)
+            case "mcp":
+                handle_mcp(args)
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         sys.exit(1)
