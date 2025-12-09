@@ -8,12 +8,21 @@ stack tecnológico y convenciones de un proyecto existente.
 
 import os
 import json
+import sys
 from pathlib import Path
 from typing import Optional
 from collections import Counter
 
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
+
+# Fix encoding on Windows
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
 
 console = Console()
 

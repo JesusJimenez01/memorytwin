@@ -880,6 +880,12 @@ LLM_MODEL=gemini-2.0-flash
     ))
 
 
+def handle_oraculo(args):
+    """Lanzar interfaz web (Oráculo)."""
+    from memorytwin.oraculo.app import main as launch_oraculo
+    launch_oraculo()
+
+
 def main():
     """Punto de entrada del CLI del Escriba."""
     parser = argparse.ArgumentParser(
@@ -1017,6 +1023,13 @@ def main():
         "mcp",
         help="Iniciar el servidor MCP para VS Code/Copilot"
     )
+
+    # Comando: oraculo (interfaz web)
+    oraculo_parser = subparsers.add_parser(
+        "oraculo",
+        help="Abrir interfaz web para gestionar memorias"
+    )
+
     consolidate_parser.add_argument(
         "--project", "-p",
         required=True,
@@ -1062,6 +1075,8 @@ def main():
                 handle_consolidate(args)
             case "mcp":
                 handle_mcp(args)
+            case "oraculo":
+                handle_oraculo(args)
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         sys.exit(1)

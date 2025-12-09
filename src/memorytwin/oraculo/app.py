@@ -13,6 +13,7 @@ Permite:
 import gradio as gr
 import pandas as pd
 from datetime import datetime
+from memorytwin.config import get_settings
 from memorytwin.escriba import MemoryStorage
 from memorytwin.oraculo import RAGEngine
 

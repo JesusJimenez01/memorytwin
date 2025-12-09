@@ -112,6 +112,20 @@ source .venv/bin/activate  # o .venv\Scripts\activate en Windows
 pip install memorytwin
 ```
 
+### Instalación con Interfaz Web (Opcional)
+
+Si deseas usar la interfaz gráfica (`mt oraculo`), necesitas instalar las dependencias extra:
+
+**Con pipx:**
+```bash
+pipx install "memorytwin[ui]"
+```
+
+**Con pip:**
+```bash
+pip install "memorytwin[ui]"
+```
+
 ---
 
 ## ⚡ Uso Rápido (5 Minutos)
@@ -152,7 +166,15 @@ LLM_MODEL=amazon/nova-2-lite-v1:free
 > - `qwen/qwen3-coder:free` - 262K contexto, excelente para código
 > - `tngtech/deepseek-r1t-chimera:free` - 164K contexto, razonamiento
 
-### Paso 3: Poner en funcionamiento
+### Paso 3: Gestión Visual (Oráculo)
+Para explorar tus memorias de forma visual, lanza la interfaz web:
+
+```bash
+mt oraculo
+```
+Esto abrirá un dashboard en tu navegador donde podrás buscar, filtrar y analizar tus episodios.
+
+### Paso 4: Poner en funcionamiento
 
 #### 🖥️ En VS Code (con Copilot/Cursor)
 Memory Twin se conecta automáticamente a través del protocolo MCP. Solo habla con tu asistente:
@@ -170,6 +192,9 @@ mt capture "Decidimos usar FastAPI por su soporte nativo de async"
 # Consultar el oráculo
 mt query "¿Por qué usamos FastAPI?"
 # -> "Según el episodio del 12/10, se eligió por el soporte async..."
+
+# Abrir la interfaz web (requiere pip install ".[ui]")
+mt oraculo
 ```
 
 ---
