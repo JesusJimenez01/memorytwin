@@ -14,11 +14,11 @@ El corazón de Memory Twin es un pipeline sofisticado de PLN diseñado para tran
 
 ```mermaid
 graph TD
-    A[Input: Raw Thinking] -->|Estructuración: Gemini 2.0| B(Episodio JSON)
+    A[Input: Raw Thinking] -->|Estructuración: LLM| B(Episodio JSON)
     B -->|Embedding: all-MiniLM| C[Vector Store: ChromaDB]
     B -->|Almacenamiento| D[Metadata Store: SQLite]
     C -->|Clustering: DBSCAN| E[Detección de Patrones]
-    E -->|Síntesis: Gemini 2.0| F[Meta-Memorias]
+    E -->|Síntesis: LLM| F[Meta-Memorias]
     G[Consulta Usuario] -->|Embedding| H[Búsqueda Semántica]
     H -->|RAG + Contexto| I[Respuesta Oráculo]
 ```
@@ -27,10 +27,10 @@ graph TD
 
 | Componente | Modelo / Algoritmo | Especificaciones Técnicas | Función |
 |------------|-------------------|---------------------------|---------|
-| **Estructuración** | `gemini-2.0-flash` | Temp: 0.3, JSON Mode | Convierte texto libre en JSON estructurado con taxonomía definida. |
+| **Estructuración** | `LLM Configurable` | Temp: 0.3, JSON Mode | Convierte texto libre en JSON estructurado con taxonomía definida. |
 | **Embeddings** | `all-MiniLM-L6-v2` | 384 dimensiones, Max seq: 256 | Genera representaciones vectoriales densas para búsqueda semántica. |
 | **Clustering** | `DBSCAN` | `eps=0.5`, `min_samples=3` | Agrupa episodios similares sin necesitar número de clusters predefinido. |
-| **Síntesis** | `gemini-2.0-flash` | Temp: 0.4, Context Window: 1M | Consolida clusters de episodios en "Meta-Memorias" (lecciones aprendidas). |
+| **Síntesis** | `LLM Configurable` | Temp: 0.4, Context Window: 1M | Consolida clusters de episodios en "Meta-Memorias" (lecciones aprendidas). |
 | **RAG** | Híbrido | Top-k: 5, Threshold: 0.7 | Recuperación semántica + filtrado por metadatos (proyecto, tags). |
 
 ### 🧩 Detalles de Implementación
@@ -82,7 +82,7 @@ graph TD
 ### 📉 Limitaciones y Trade-offs
 
 *   **Latencia**: La generación de embeddings y la inferencia LLM añaden latencia (~500ms - 2s). *Mitigación*: Caché agresivo y procesamiento asíncrono en background.
-*   **Coste**: Requiere llamadas a API (Gemini). *Mitigación*: Uso de modelos Flash (muy económicos) y embeddings locales (coste cero).
+*   **Coste**: Requiere llamadas a API (LLM). *Mitigación*: Uso de modelos Flash (muy económicos) y embeddings locales (coste cero).
 *   **Alucinaciones**: Riesgo inherente a los LLMs. *Mitigación*: RAG estricto (grounding) y citas de fuentes en las respuestas.
 
 ---
@@ -281,7 +281,7 @@ Memory Twin expone 14 herramientas potentes para tu asistente de IA:
 Aunque el rendimiento varía según el hardware, las pruebas preliminares en un entorno estándar muestran:
 
 *   **Precisión del RAG (Recall@5)**: 92% (El episodio correcto aparece en el top 5 resultados).
-*   **Coherencia de Consolidación**: 0.85 (Score medio de calidad de las meta-memorias generadas por Gemini).
+*   **Coherencia de Consolidación**: 0.85 (Score medio de calidad de las meta-memorias generadas por el LLM).
 *   **Latencia Media de Consulta**: 1.2 segundos (End-to-end).
 *   **Ahorro de Tiempo Estimado**: ~30% en tareas de debugging al evitar investigar errores ya resueltos.
 

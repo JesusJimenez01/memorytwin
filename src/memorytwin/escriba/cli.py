@@ -860,7 +860,7 @@ LLM_MODEL=amazon/nova-2-lite-v1:free
     
     next_steps = """
 [bold]Próximos pasos:[/bold]
-  1. Edita [cyan].env[/cyan] y configura tu LLM (Gemini u OpenRouter)
+  1. Edita [cyan].env[/cyan] y configura tu proveedor de LLM
   2. Reinicia VS Code (F1 → "Developer: Reload Window")
   3. Verifica en MCP: List Servers que memorytwin está conectado
   4. ¡Listo! Copilot usará Memory Twin automáticamente
