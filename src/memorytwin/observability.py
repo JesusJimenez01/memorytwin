@@ -25,7 +25,7 @@ logging.getLogger("langfuse").setLevel(logging.ERROR)
 from memorytwin.config import get_settings  # noqa: F401 - asegura que .env esté cargado
 
 try:
-    from langfuse import Langfuse
+    from langfuse import Langfuse  # type: ignore
 except ImportError:
     Langfuse = None
 
