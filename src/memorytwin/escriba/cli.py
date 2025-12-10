@@ -445,6 +445,12 @@ get_project_context(topic="<términos relevantes de la pregunta del usuario>")
 
 **Mi primera acción SIEMPRE es obtener contexto del proyecto. SIEMPRE.**
 
+## 🛠️ Disponibilidad de Herramientas
+Estas instrucciones asumen que el servidor MCP de MemoryTwin está activo.
+- Si la herramienta `get_project_context` falla o no está disponible:
+1. NOTIFÍCAME inmediatamente: "⚠️ No puedo acceder a mi memoria. Verifica el servidor MCP."
+2. Pídeme que te pegue el contexto manualmente si es crítico.
+
 ---
 
 ## ¿Qué es Memory Twin?
@@ -745,16 +751,12 @@ capture_thinking(
     files_created = []
     files_updated = []
     
-    # Crear directorio .github si no existe
-    github_dir = project_path / ".github"
-    github_dir.mkdir(parents=True, exist_ok=True)
-    
     # Crear directorio .vscode si no existe
     vscode_dir = project_path / ".vscode"
     vscode_dir.mkdir(parents=True, exist_ok=True)
     
-    # Escribir archivo de instrucciones
-    instructions_path = github_dir / "copilot-instructions.md"
+    # Escribir archivo de instrucciones estándar
+    instructions_path = project_path / "AGENTS.md"
     instructions_path.write_text(instructions_content, encoding="utf-8")
     files_created.append(str(instructions_path.relative_to(project_path)))
     
@@ -976,7 +978,7 @@ def main():
     # Comando: setup
     setup_parser = subparsers.add_parser(
         "setup",
-        help="Configurar Memory Twin en un proyecto (crea .github/copilot-instructions.md)"
+        help="Configurar Memory Twin en un proyecto (crea AGENTS.md)"
     )
     setup_parser.add_argument(
         "path",
