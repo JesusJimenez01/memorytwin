@@ -45,9 +45,9 @@ class Settings(BaseSettings):
     
     # LLM Config
     # provider: "google" o "openrouter"
-    llm_provider: str = Field(default="google")
-    # modelo: "gemini-2.0-flash", "meta-llama/llama-3.1-8b-instruct:free", etc.
-    llm_model: str = Field(default="gemini-2.0-flash")
+    llm_provider: str = Field(default="openrouter")
+    # modelo: "gemini-2.0-flash", "amazon/nova-2-lite-v1:free", etc.
+    llm_model: str = Field(default="amazon/nova-2-lite-v1:free")
     llm_temperature: float = Field(default=0.3)
     
     # Embedding Config

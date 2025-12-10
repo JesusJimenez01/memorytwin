@@ -774,22 +774,22 @@ capture_thinking(
 # LLM PROVIDER - Choose ONE of the options below
 # =============================================================================
 
-# Option A: Google Gemini (default)
-# Get your key at: https://aistudio.google.com/apikey
-GOOGLE_API_KEY=your_google_api_key_here
-LLM_PROVIDER=google
-LLM_MODEL=gemini-2.0-flash
-
-# Option B: OpenRouter (access to many free models)
+# Option A: OpenRouter (recommended - access to many free models)
 # Get your key at: https://openrouter.ai/keys
-# OPENROUTER_API_KEY=your_openrouter_key_here
-# LLM_PROVIDER=openrouter
-# LLM_MODEL=amazon/nova-2-lite-v1:free
+OPENROUTER_API_KEY=your_openrouter_key_here
+LLM_PROVIDER=openrouter
+LLM_MODEL=amazon/nova-2-lite-v1:free
 
 # Free models on OpenRouter (updated Dec 2025):
 # - amazon/nova-2-lite-v1:free (1M context, fast)
 # - qwen/qwen3-coder:free (262K context, great for code)
 # - tngtech/deepseek-r1t-chimera:free (164K context, reasoning)
+
+# Option B: Google Gemini
+# Get your key at: https://aistudio.google.com/apikey
+# GOOGLE_API_KEY=your_google_api_key_here
+# LLM_PROVIDER=google
+# LLM_MODEL=gemini-2.0-flash
 
 # =============================================================================
 # OPTIONAL SETTINGS

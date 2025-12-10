@@ -147,14 +147,7 @@ Esto creará una carpeta `data/` (ignorada por git) y un archivo `.env`.
 ### Paso 2: Configuración
 Abre el archivo `.env` generado y configura tu proveedor de LLM.
 
-#### Opción A: Google Gemini (default)
-```ini
-GOOGLE_API_KEY=tu_api_key_aqui
-LLM_PROVIDER=google
-LLM_MODEL=gemini-2.0-flash
-```
-
-#### Opción B: OpenRouter (acceso a múltiples modelos gratuitos)
+#### Opción A: OpenRouter (recomendado - acceso a múltiples modelos gratuitos)
 ```ini
 OPENROUTER_API_KEY=tu_api_key_aqui
 LLM_PROVIDER=openrouter
@@ -165,6 +158,13 @@ LLM_MODEL=amazon/nova-2-lite-v1:free
 > - `amazon/nova-2-lite-v1:free` - 1M contexto, rápido
 > - `qwen/qwen3-coder:free` - 262K contexto, excelente para código
 > - `tngtech/deepseek-r1t-chimera:free` - 164K contexto, razonamiento
+
+#### Opción B: Google Gemini
+```ini
+GOOGLE_API_KEY=tu_api_key_aqui
+LLM_PROVIDER=google
+LLM_MODEL=gemini-2.0-flash
+```
 
 ### Paso 3: Gestión Visual (Oráculo)
 Para explorar tus memorias de forma visual, lanza la interfaz web:
@@ -221,7 +221,7 @@ Memory Twin respeta la privacidad y localidad de tus datos.
 
 ## 🛠️ Herramientas MCP Disponibles
 
-Memory Twin expone 12 herramientas potentes para tu asistente de IA:
+Memory Twin expone 14 herramientas potentes para tu asistente de IA:
 
 | Herramienta | Descripción | Ejemplo de Uso |
 |-------------|-------------|----------------|

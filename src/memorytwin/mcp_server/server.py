@@ -8,7 +8,9 @@ capacidades del Escriba y Oráculo a clientes compatibles.
 
 import json
 import logging
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Optional
 
 from mcp.server import Server
@@ -43,6 +45,52 @@ from memorytwin.oraculo.rag_engine import RAGEngine
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("memorytwin.mcp")
+
+
+def _detect_project_name() -> str:
+    """
+    Detecta automáticamente el nombre del proyecto basándose en el CWD.
+    
+    Estrategia:
+    1. Obtener el directorio de trabajo actual (CWD)
+    2. Usar el nombre de la carpeta como nombre del proyecto
+    3. Evitar nombres genéricos como 'home', 'Users', etc.
+    
+    Returns:
+        Nombre del proyecto detectado, o 'default' si no se puede determinar.
+    """
+    try:
+        cwd = Path(os.getcwd())
+        project_name = cwd.name
+        
+        # Lista de nombres a ignorar (demasiado genéricos)
+        generic_names = {
+            'home', 'users', 'user', 'desktop', 'documents', 
+            'downloads', 'tmp', 'temp', 'root', 'var', 'opt',
+            'src', 'source', 'code', 'projects', 'repos', 'git',
+            'c:', 'd:', 'e:'  # Raíces de Windows
+        }
+        
+        if project_name.lower() in generic_names:
+            # Intentar subir un nivel si el nombre es genérico
+            parent_name = cwd.parent.name
+            if parent_name.lower() not in generic_names:
+                project_name = parent_name
+            else:
+                return "default"
+        
+        # Limpiar el nombre (remover caracteres problemáticos)
+        project_name = project_name.strip().replace(' ', '_')
+        
+        if not project_name:
+            return "default"
+            
+        logger.debug(f"Proyecto detectado automáticamente: {project_name}")
+        return project_name
+        
+    except Exception as e:
+        logger.warning(f"No se pudo detectar el proyecto: {e}")
+        return "default"
 
 
 class MemoryTwinMCPServer:
@@ -115,8 +163,7 @@ class MemoryTwinMCPServer:
                             },
                             "project_name": {
                                 "type": "string",
-                                "description": "Nombre del proyecto",
-                                "default": "default"
+                                "description": "Nombre del proyecto (se detecta automáticamente desde el directorio de trabajo si no se especifica)"
                             }
                         },
                         "required": ["thinking_text"]
@@ -175,8 +222,7 @@ class MemoryTwinMCPServer:
                             },
                             "project_name": {
                                 "type": "string",
-                                "description": "Nombre del proyecto",
-                                "default": "default"
+                                "description": "Nombre del proyecto (se detecta automáticamente desde el directorio de trabajo si no se especifica)"
                             }
                         },
                         "required": ["task", "decision", "reasoning"]
@@ -212,8 +258,7 @@ class MemoryTwinMCPServer:
                             },
                             "project_name": {
                                 "type": "string",
-                                "description": "Nombre del proyecto",
-                                "default": "default"
+                                "description": "Nombre del proyecto (se detecta automáticamente desde el directorio de trabajo si no se especifica)"
                             },
                             "source_assistant": {
                                 "type": "string",
@@ -552,6 +597,9 @@ class MemoryTwinMCPServer:
     
     async def _capture_thinking(self, args: dict) -> CallToolResult:
         """Capturar pensamiento y almacenarlo."""
+        # Detectar proyecto automáticamente si no se proporciona
+        project_name = args.get("project_name") or _detect_project_name()
+        
         raw_input = ProcessedInput(
             raw_text=args["thinking_text"],
             user_prompt=args.get("user_prompt"),
@@ -561,7 +609,7 @@ class MemoryTwinMCPServer:
         
         episode = await self.processor.process_thought(
             raw_input,
-            project_name=args.get("project_name", "default"),
+            project_name=project_name,
             source_assistant=args.get("source_assistant", "unknown")
         )
         
@@ -570,6 +618,7 @@ class MemoryTwinMCPServer:
         result = {
             "success": True,
             "episode_id": episode_id,
+            "project": project_name,  # Proyecto donde se guardó
             "task": episode.task,
             "type": episode.episode_type.value,
             "tags": episode.tags,
@@ -604,6 +653,9 @@ class MemoryTwinMCPServer:
         
         thinking_text = "\n\n".join(parts)
         
+        # Detectar proyecto automáticamente si no se proporciona
+        project_name = args.get("project_name") or _detect_project_name()
+        
         raw_input = ProcessedInput(
             raw_text=thinking_text,
             code_changes=args.get("code_changes"),
@@ -612,7 +664,7 @@ class MemoryTwinMCPServer:
         
         episode = await self.processor.process_thought(
             raw_input,
-            project_name=args.get("project_name", "default"),
+            project_name=project_name,
             source_assistant=args.get("source_assistant", "unknown")
         )
         
@@ -621,6 +673,7 @@ class MemoryTwinMCPServer:
         result = {
             "success": True,
             "episode_id": episode_id,
+            "project": project_name,  # Proyecto donde se guardó
             "task": episode.task,
             "decision": args["decision"],
             "type": episode.episode_type.value,
@@ -648,6 +701,9 @@ class MemoryTwinMCPServer:
         
         thinking_text = "\n\n".join(parts)
         
+        # Detectar proyecto automáticamente si no se proporciona
+        project_name = args.get("project_name") or _detect_project_name()
+        
         raw_input = ProcessedInput(
             raw_text=thinking_text,
             source="mcp"
@@ -655,7 +711,7 @@ class MemoryTwinMCPServer:
         
         episode = await self.processor.process_thought(
             raw_input,
-            project_name=args.get("project_name", "default"),
+            project_name=project_name,
             source_assistant=args.get("source_assistant", "unknown")
         )
         
@@ -664,6 +720,7 @@ class MemoryTwinMCPServer:
         result = {
             "success": True,
             "episode_id": episode_id,
+            "project": project_name,  # Incluir proyecto en la respuesta
             "task": episode.task,
             "type": episode.episode_type.value,
             "lessons_learned": episode.lessons_learned
