@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "memorytwin"
 version = "0.1.0"
-description = "Agente de Memoria Episódica para Desarrollo de Software - Arquitectura dual Escriba + Oráculo"
+description = "Episodic Memory Agent for Software Development - Dual Escriba + Oráculo Architecture"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
@@ -22,9 +22,9 @@ classifiers = [
 ]
 
 dependencies = [
-    # Core - Siempre necesarias
+    # Core
     "google-generativeai>=0.8.0",
-    "openai>=1.0.0",  # Para OpenRouter y otros proveedores compatibles
+    "openai>=1.0.0",  # For OpenRouter and other compatible providers
     "chromadb>=0.4.0",
     "sentence-transformers>=2.2.0",
     "mcp>=1.0.0",
@@ -35,38 +35,38 @@ dependencies = [
     "httpx>=0.25.0",
     "tenacity>=8.0.0",
     "sqlalchemy>=2.0.0",
-    "scikit-learn>=1.0.0",  # Para DBSCAN en consolidación
+    "scikit-learn>=1.0.0",  # For DBSCAN clustering in consolidation
 ]
 
 [project.optional-dependencies]
-# Interfaz web (Oráculo UI)
+# Web interface (Oráculo UI)
 ui = [
     "gradio>=4.0.0",
 ]
 
-# Observabilidad
+# Observability
 observability = [
     "langfuse>=2.0.0",
 ]
 
-# Base de datos SQL (para escalabilidad)
+# SQL database (for scalability)
 sql = [
     "sqlalchemy>=2.0.0",
     "aiosqlite>=0.19.0",
     "alembic>=1.13.0",
 ]
 
-# Proveedores LLM alternativos
+# Alternative LLM providers
 anthropic = [
     "anthropic>=0.30.0",
 ]
 
-# Todas las features
+# All features
 all = [
     "memorytwin[ui,observability,sql,anthropic]",
 ]
 
-# Desarrollo
+# Development
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
@@ -76,22 +76,27 @@ dev = [
 ]
 
 [project.scripts]
-# Comando principal - usar 'mt' desde cualquier lugar
+# Main command
 mt = "memorytwin.escriba.cli:main"
 
-# Aliases alternativos
 memorytwin = "memorytwin.escriba.cli:main"
-memorytwin-escriba = "memorytwin.escriba.cli:main"
 memorytwin-oraculo = "memorytwin.oraculo.app:main"
 memorytwin-mcp = "memorytwin.mcp_server.server:main"
 
 [tool.black]
-line-length = 100
+line-length = 120
 target-version = ['py310']
 
 [tool.ruff]
-line-length = 100
+line-length = 120
+
+[tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/memorytwin/observability.py" = ["E402"]
+"src/memorytwin/mcp_server/server.py" = ["E402"]
+"src/memorytwin/escriba/cli.py" = ["E402", "E501"]
 
 [tool.coverage.run]
 source = ["src/memorytwin"]

@@ -1,6 +1,6 @@
 """
-CLI del Escriba - Interfaz de línea de comandos
-===============================================
+Escriba CLI - Command Line Interface
+=====================================
 """
 
 import argparse
@@ -8,7 +8,7 @@ import logging
 import sys
 import warnings
 
-# Silenciar warnings molestos ANTES de cualquier import
+# Silence noisy warnings BEFORE any imports
 logging.getLogger("langfuse").setLevel(logging.CRITICAL)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 warnings.filterwarnings("ignore", message=".*ended span.*")
@@ -20,11 +20,11 @@ console = Console()
 
 
 def handle_capture(args):
-    """Manejar comando de captura."""
+    """Handle capture command."""
     from memorytwin.escriba import Escriba
-    
+
     escriba = Escriba(project_name=args.project)
-    
+
     if args.file:
         episode = escriba.capture_from_file(
             args.file,
@@ -37,7 +37,7 @@ def handle_capture(args):
             project_name=args.project
         )
     else:
-        console.print("[yellow]Pega el texto de thinking (termina con Ctrl+D o línea vacía):[/yellow]")
+        console.print("[yellow]Paste thinking text (end with Ctrl+D or empty line):[/yellow]")
         lines = []
         try:
             while True:
@@ -47,697 +47,699 @@ def handle_capture(args):
                 lines.append(line)
         except EOFError:
             pass
-            
+
         if not lines:
-            console.print("[red]No se proporcionó texto.[/red]")
+            console.print("[red]No text provided.[/red]")
             return
-            
+
         thinking_text = "\n".join(lines)
         episode = escriba.capture_thinking_sync(
             thinking_text,
             source_assistant=args.assistant,
             project_name=args.project
         )
-    
-    console.print(f"\n[green]✓ Episodio guardado: {episode.id}[/green]")
+
+    console.print(f"\n[green]✓ Episode saved: {episode.id}[/green]")
 
 
 def handle_stats(args):
-    """Manejar comando de estadísticas."""
+    """Handle statistics command."""
     from memorytwin.escriba import MemoryStorage
-    
+
     storage = MemoryStorage()
     stats = storage.get_statistics(args.project)
-    
+
     console.print(Panel(
-        f"[bold]Total de episodios:[/bold] {stats['total_episodes']}\n"
-        f"[bold]En ChromaDB:[/bold] {stats['chroma_count']}\n\n"
-        f"[bold]Por tipo:[/bold]\n" +
+        f"[bold]Total episodes:[/bold] {stats['total_episodes']}\n"
+        f"[bold]In ChromaDB:[/bold] {stats['chroma_count']}\n\n"
+        f"[bold]By type:[/bold]\n" +
         "\n".join(f"  • {k}: {v}" for k, v in stats['by_type'].items() if v > 0) +
-        "\n\n[bold]Por asistente:[/bold]\n" +
+        "\n\n[bold]By assistant:[/bold]\n" +
         "\n".join(f"  • {k}: {v}" for k, v in stats['by_assistant'].items()),
-        title="📊 Estadísticas de Memoria",
+        title="📊 Memory Statistics",
         border_style="blue"
     ))
 
 
 def handle_search(args):
-    """Manejar comando de búsqueda."""
+    """Handle search command."""
     from memorytwin.escriba import MemoryStorage
     from memorytwin.models import MemoryQuery
-    
+
     storage = MemoryStorage()
-    
+
     query = MemoryQuery(
         query=args.query,
         project_filter=args.project,
         top_k=args.top
     )
-    
+
     results = storage.search_episodes(query)
-    
+
     if not results:
-        console.print("[yellow]No se encontraron resultados.[/yellow]")
+        console.print("[yellow]No results found.[/yellow]")
         return
-        
-    console.print(f"\n[bold]🔍 {len(results)} resultados para:[/bold] {args.query}\n")
-    
+
+    console.print(f"\n[bold]🔍 {len(results)} results for:[/bold] {args.query}\n")
+
     for i, result in enumerate(results, 1):
         ep = result.episode
         console.print(Panel(
-            f"[bold]Tarea:[/bold] {ep.task}\n"
-            f"[bold]Resumen:[/bold] {ep.solution_summary}\n"
-            f"[bold]Tipo:[/bold] {ep.episode_type.value} | "
-            f"[bold]Fecha:[/bold] {ep.timestamp.strftime('%Y-%m-%d %H:%M')}\n"
-            f"[bold]Relevancia:[/bold] {result.relevance_score:.2%}",
-            title=f"Resultado {i}",
+            f"[bold]Task:[/bold] {ep.task}\n"
+            f"[bold]Summary:[/bold] {ep.solution_summary}\n"
+            f"[bold]Type:[/bold] {ep.episode_type.value} | "
+            f"[bold]Date:[/bold] {ep.timestamp.strftime('%Y-%m-%d %H:%M')}\n"
+            f"[bold]Relevance:[/bold] {result.relevance_score:.2%}",
+            title=f"Result {i}",
             border_style="cyan"
         ))
 
 
 def handle_query(args):
-    """Manejar consulta RAG."""
+    """Handle RAG query."""
     import asyncio
-    from memorytwin.oraculo import RAGEngine
+
     from memorytwin.escriba import MemoryStorage
-    
+    from memorytwin.oraculo import RAGEngine
+
     storage = MemoryStorage()
     rag = RAGEngine(storage=storage)
-    
-    console.print(f"\n[bold cyan]🤔 Consultando:[/bold cyan] {args.question}\n")
-    
+
+    console.print(f"\n[bold cyan]🤔 Querying:[/bold cyan] {args.question}\n")
+
     result = asyncio.run(rag.query(
         question=args.question,
         project_name=args.project
     ))
-    
+
     console.print(Panel(
         result["answer"],
-        title="💡 Respuesta",
+        title="💡 Answer",
         border_style="green"
     ))
-    
+
     if result.get("sources"):
-        console.print("\n[dim]Fuentes consultadas:[/dim]")
+        console.print("\n[dim]Sources consulted:[/dim]")
         for src in result["sources"][:3]:
             console.print(f"  • {src['task'][:60]}...")
 
 
 def handle_lessons(args):
-    """Manejar comando de lecciones."""
-    from memorytwin.oraculo import RAGEngine
+    """Handle lessons command."""
     from memorytwin.escriba import MemoryStorage
-    
+    from memorytwin.oraculo import RAGEngine
+
     storage = MemoryStorage()
     rag = RAGEngine(storage=storage)
-    
+
     lessons = rag.get_lessons(project_name=args.project)
-    
+
     if not lessons:
-        console.print("[yellow]No hay lecciones registradas aún.[/yellow]")
+        console.print("[yellow]No lessons recorded yet.[/yellow]")
         return
-    
-    console.print(f"\n[bold]📚 {len(lessons)} lecciones aprendidas:[/bold]\n")
-    
+
+    console.print(f"\n[bold]📚 {len(lessons)} lessons learned:[/bold]\n")
+
     for lesson in lessons:
         console.print(Panel(
             f"[bold]{lesson['lesson']}[/bold]\n\n"
-            f"[dim]De: {lesson['from_task'][:60]}...[/dim]\n"
-            f"[dim]Fecha: {lesson['timestamp'].strftime('%Y-%m-%d')} | Tags: {', '.join(lesson['tags'][:3])}[/dim]",
+            f"[dim]From: {lesson['from_task'][:60]}...[/dim]\n"
+            f"[dim]Date: {lesson['timestamp'].strftime('%Y-%m-%d')} | Tags: {', '.join(lesson['tags'][:3])}[/dim]",
             border_style="yellow"
         ))
 
 
 def handle_onboard(args):
-    """Ejecutar onboarding de un proyecto existente."""
+    """Run onboarding for an existing project."""
     import asyncio
     from pathlib import Path
-    from memorytwin.escriba.project_analyzer import ProjectAnalyzer, onboard_project
-    
+
+    from memorytwin.escriba.project_analyzer import onboard_project
+
     project_path = Path(args.path).resolve()
-    
+
     if not project_path.exists():
-        console.print(f"[red]Error: El directorio no existe: {project_path}[/red]")
+        console.print(f"[red]Error: Directory does not exist: {project_path}[/red]")
         return
-    
+
     console.print(Panel(
-        f"[bold cyan]🔍 Analizando proyecto...[/bold cyan]\n"
-        f"Ruta: {project_path}",
+        f"[bold cyan]🔍 Analyzing project...[/bold cyan]\n"
+        f"Path: {project_path}",
         title="Memory Twin - Onboarding",
         border_style="cyan"
     ))
-    
+
     try:
         result = asyncio.run(onboard_project(
             project_path=str(project_path),
             project_name=args.project,
             source_assistant="onboarding-analyzer"
         ))
-        
+
         analysis = result['analysis']
-        
-        # Mostrar resumen
-        stack_list = ", ".join([s['technology'] for s in analysis['stack'][:5]]) or "No detectado"
-        patterns_list = ", ".join([p.get('pattern', p.get('directory', '')) for p in analysis['patterns'][:3]]) or "No detectados"
-        deps_list = ", ".join(analysis['dependencies']['main'][:8]) or "No detectadas"
-        
+
+        # Show summary
+        stack_list = ", ".join([s['technology'] for s in analysis['stack'][:5]]) or "Not detected"
+        patterns_list = ", ".join([p.get('pattern', p.get('directory', '')) for p in analysis['patterns'][:3]]) or "Not detected"
+        deps_list = ", ".join(analysis['dependencies']['main'][:8]) or "Not detected"
+
         console.print(Panel(
-            f"[bold green]✓ Onboarding completado![/bold green]\n\n"
-            f"[bold]Proyecto:[/bold] {result['project_name']}\n"
-            f"[bold]Episodio:[/bold] {result['episode_id']}\n\n"
-            f"[bold]Stack detectado:[/bold]\n  {stack_list}\n\n"
-            f"[bold]Patrones:[/bold]\n  {patterns_list}\n\n"
-            f"[bold]Dependencias principales:[/bold]\n  {deps_list}\n\n"
-            f"[dim]La memoria inicial del proyecto ha sido creada.\n"
-            f"El agente ahora conoce la estructura y convenciones.[/dim]",
-            title="🧠 Análisis Completado",
+            f"[bold green]✓ Onboarding completed![/bold green]\n\n"
+            f"[bold]Project:[/bold] {result['project_name']}\n"
+            f"[bold]Episode:[/bold] {result['episode_id']}\n\n"
+            f"[bold]Detected stack:[/bold]\n  {stack_list}\n\n"
+            f"[bold]Patterns:[/bold]\n  {patterns_list}\n\n"
+            f"[bold]Main dependencies:[/bold]\n  {deps_list}\n\n"
+            f"[dim]Initial project memory has been created.\n"
+            f"The agent now knows the structure and conventions.[/dim]",
+            title="🧠 Analysis Completed",
             border_style="green"
         ))
-        
+
         if args.verbose:
-            console.print("\n[bold]Texto de onboarding generado:[/bold]")
+            console.print("\n[bold]Generated onboarding text:[/bold]")
             console.print(result['onboarding_text'])
-            
+
     except Exception as e:
-        console.print(f"[red]Error durante el onboarding: {e}[/red]")
+        console.print(f"[red]Error during onboarding: {e}[/red]")
         raise
 
 
 def handle_health_check(args):
-    """Verificar integridad del sistema Memory Twin."""
-    from memorytwin.escriba import MemoryStorage
+    """Verify Memory Twin system integrity."""
     from memorytwin.config import get_chroma_dir, get_sqlite_path
-    
+    from memorytwin.escriba import MemoryStorage
+
     console.print(Panel(
-        "[bold cyan]🔍 Verificando integridad del sistema...[/bold cyan]",
+        "[bold cyan]🔍 Verifying system integrity...[/bold cyan]",
         title="Memory Twin - Health Check",
         border_style="cyan"
     ))
-    
+
     issues = []
     warnings = []
-    
+
     try:
         storage = MemoryStorage()
         stats = storage.get_statistics()
-        
+
         sqlite_count = stats['total_episodes']
         chroma_count = stats['chroma_count']
-        
-        # Verificar consistencia entre SQLite y ChromaDB
+
+        # Verify consistency between SQLite and ChromaDB
         if sqlite_count != chroma_count:
             issues.append(
-                f"⚠️ Inconsistencia: SQLite tiene {sqlite_count} episodios, "
-                f"ChromaDB tiene {chroma_count}"
+                f"⚠️ Inconsistency: SQLite has {sqlite_count} episodes, "
+                f"ChromaDB has {chroma_count}"
             )
-        
-        # Verificar archivos de base de datos
+
+        # Verify database files
         chroma_dir = get_chroma_dir()
         sqlite_path = get_sqlite_path()
-        
+
         if not chroma_dir.exists():
-            issues.append(f"❌ Directorio ChromaDB no existe: {chroma_dir}")
-        
+            issues.append(f"❌ ChromaDB directory does not exist: {chroma_dir}")
+
         if not sqlite_path.exists():
-            issues.append(f"❌ Archivo SQLite no existe: {sqlite_path}")
-        
-        # Verificar tamaño de base de datos
+            issues.append(f"❌ SQLite file does not exist: {sqlite_path}")
+
+        # Verify database size
         if sqlite_path.exists():
             size_mb = sqlite_path.stat().st_size / (1024 * 1024)
             if size_mb > 100:
-                warnings.append(f"📦 Base de datos grande: {size_mb:.1f} MB")
-        
-        # Resultados
+                warnings.append(f"📦 Large database: {size_mb:.1f} MB")
+
+        # Results
         if issues:
-            console.print("\n[bold red]❌ Problemas encontrados:[/bold red]")
+            console.print("\n[bold red]❌ Problems found:[/bold red]")
             for issue in issues:
                 console.print(f"  {issue}")
-        
+
         if warnings:
-            console.print("\n[bold yellow]⚠️ Advertencias:[/bold yellow]")
+            console.print("\n[bold yellow]⚠️ Warnings:[/bold yellow]")
             for warning in warnings:
                 console.print(f"  {warning}")
-        
+
         if not issues and not warnings:
             console.print(Panel(
-                f"[bold green]✓ Sistema saludable[/bold green]\n\n"
-                f"[bold]Episodios en SQLite:[/bold] {sqlite_count}\n"
-                f"[bold]Episodios en ChromaDB:[/bold] {chroma_count}\n"
-                f"[bold]Sincronización:[/bold] ✓ OK",
+                f"[bold green]✓ System healthy[/bold green]\n\n"
+                f"[bold]Episodes in SQLite:[/bold] {sqlite_count}\n"
+                f"[bold]Episodes in ChromaDB:[/bold] {chroma_count}\n"
+                f"[bold]Synchronization:[/bold] ✓ OK",
                 title="✅ Health Check Passed",
                 border_style="green"
             ))
         else:
             console.print(Panel(
-                f"[bold]Episodios en SQLite:[/bold] {sqlite_count}\n"
-                f"[bold]Episodios en ChromaDB:[/bold] {chroma_count}\n\n"
-                f"[dim]Usa 'mt sync --repair' para corregir inconsistencias[/dim]",
-                title="📊 Estado Actual",
+                f"[bold]Episodes in SQLite:[/bold] {sqlite_count}\n"
+                f"[bold]Episodes in ChromaDB:[/bold] {chroma_count}\n\n"
+                f"[dim]Use 'mt sync --repair' to fix inconsistencies[/dim]",
+                title="📊 Current State",
                 border_style="yellow"
             ))
-        
+
     except Exception as e:
-        console.print(f"[red]Error durante health check: {e}[/red]")
+        console.print(f"[red]Error during health check: {e}[/red]")
         raise
 
 
 def handle_consolidate(args):
-    """Consolidar episodios relacionados en meta-memorias."""
+    """Consolidate related episodes into meta-memories."""
     from memorytwin.consolidation import MemoryConsolidator
     from memorytwin.escriba import MemoryStorage
-    
+
     console.print(Panel(
-        f"[bold cyan]🧠 Consolidando memorias del proyecto: {args.project}[/bold cyan]\n"
-        f"Mínimo episodios por cluster: {args.min_cluster}",
-        title="Memory Twin - Consolidación",
+        f"[bold cyan]🧠 Consolidating project memories: {args.project}[/bold cyan]\n"
+        f"Minimum episodes per cluster: {args.min_cluster}",
+        title="Memory Twin - Consolidation",
         border_style="cyan"
     ))
-    
+
     try:
         storage = MemoryStorage()
-        
-        # Verificar que hay suficientes episodios
+
+        # Verify there are enough episodes
         stats = storage.get_statistics(args.project)
         total_episodes = stats['total_episodes']
-        
+
         if total_episodes < args.min_cluster:
             console.print(
-                f"[yellow]⚠️ El proyecto solo tiene {total_episodes} episodios. "
-                f"Se necesitan al menos {args.min_cluster} para consolidar.[/yellow]"
+                f"[yellow]⚠️ The project only has {total_episodes} episodes. "
+                f"At least {args.min_cluster} are needed to consolidate.[/yellow]"
             )
             return
-        
-        console.print(f"[dim]Analizando {total_episodes} episodios...[/dim]")
-        
-        # Ejecutar consolidación
+
+        console.print(f"[dim]Analyzing {total_episodes} episodes...[/dim]")
+
+        # Run consolidation
         consolidator = MemoryConsolidator(
             storage=storage,
             min_cluster_size=args.min_cluster
         )
-        
+
         meta_memories = consolidator.consolidate_project(args.project)
-        
+
         if not meta_memories:
             console.print(
-                "[yellow]No se encontraron clusters suficientemente grandes "
-                "para consolidar. Intenta con --min-cluster menor.[/yellow]"
+                "[yellow]No clusters large enough to consolidate were found. "
+                "Try with a lower --min-cluster value.[/yellow]"
             )
             return
-        
-        # Mostrar resultados
+
+        # Show results
         console.print(Panel(
-            f"[bold green]✓ Consolidación completada![/bold green]\n\n"
-            f"[bold]Meta-memorias generadas:[/bold] {len(meta_memories)}\n"
-            f"[bold]Episodios consolidados:[/bold] "
+            f"[bold green]✓ Consolidation completed![/bold green]\n\n"
+            f"[bold]Meta-memories generated:[/bold] {len(meta_memories)}\n"
+            f"[bold]Episodes consolidated:[/bold] "
             f"{sum(m.episode_count for m in meta_memories)}",
-            title="🧠 Resultado",
+            title="🧠 Result",
             border_style="green"
         ))
-        
+
         if args.verbose:
             for i, meta in enumerate(meta_memories, 1):
                 console.print(Panel(
-                    f"[bold]Patrón:[/bold] {meta.pattern_summary}\n\n"
-                    f"[bold]Lecciones:[/bold]\n" +
-                    "\n".join(f"  • {l}" for l in meta.lessons[:3]) + "\n\n"
-                    f"[bold]Mejores prácticas:[/bold]\n" +
+                    f"[bold]Pattern:[/bold] {meta.pattern_summary}\n\n"
+                    f"[bold]Lessons:[/bold]\n" +
+                    "\n".join(f"  • {lesson}" for lesson in meta.lessons[:3]) + "\n\n"
+                    "[bold]Best practices:[/bold]\n" +
                     "\n".join(f"  • {p}" for p in meta.best_practices[:2]) + "\n\n"
-                    f"[dim]Episodios: {meta.episode_count} | "
-                    f"Confianza: {meta.confidence:.0%} | "
-                    f"Coherencia: {meta.coherence_score:.0%}[/dim]",
-                    title=f"Meta-Memoria {i}",
+                    f"[dim]Episodes: {meta.episode_count} | "
+                    f"Confidence: {meta.confidence:.0%} | "
+                    f"Coherence: {meta.coherence_score:.0%}[/dim]",
+                    title=f"Meta-Memory {i}",
                     border_style="magenta"
                 ))
-        
+
     except Exception as e:
-        console.print(f"[red]Error durante consolidación: {e}[/red]")
+        console.print(f"[red]Error during consolidation: {e}[/red]")
         raise
 
 
 def handle_mcp(args):
-    """Iniciar el servidor MCP."""
+    """Start the MCP server."""
     import asyncio
+
     from memorytwin.mcp_server.server import _async_main
-    
-    console.print("[cyan]Iniciando servidor MCP...[/cyan]")
+
+    console.print("[cyan]Starting MCP server...[/cyan]")
     asyncio.run(_async_main())
 
 
 def handle_setup(args):
-    """Configurar Memory Twin en un proyecto."""
+    """Configure Memory Twin in a project."""
     import json
-    import os
     import shutil
     from pathlib import Path
-    
+
     project_path = Path(args.path).resolve()
-    
+
     if not project_path.exists():
-        console.print(f"[red]Error: El directorio no existe: {project_path}[/red]")
+        console.print(f"[red]Error: Directory does not exist: {project_path}[/red]")
         return
-    
+
     console.print(Panel(
-        f"[bold cyan]🔧 Configurando Memory Twin...[/bold cyan]\n"
-        f"Proyecto: {project_path}",
+        f"[bold cyan]🔧 Configuring Memory Twin...[/bold cyan]\n"
+        f"Project: {project_path}",
         title="Memory Twin - Setup",
         border_style="cyan"
     ))
-    
-    # Detectar la mejor forma de invocar el MCP server
-    # Orden de prioridad: mt en PATH (absoluto) > uvx > python -m
+
+    # Detect the best way to invoke the MCP server
+    # Priority order: mt in PATH (absolute) > uvx > python -m
     mt_path = shutil.which("mt")
     uv_available = shutil.which("uv") is not None
-    
+
     if mt_path:
-        # Opción 1: mt mcp (usando ruta absoluta para robustez)
+        # Option 1: mt mcp (using absolute path for robustness)
         mcp_command = mt_path
         mcp_args = ["mcp"]
         install_method = "mt"
     elif uv_available:
-        # Opción 2: uvx (descarga automáticamente si no está instalado)
+        # Option 2: uvx (auto-downloads if not installed)
         mcp_command = "uvx"
         mcp_args = ["--from", "memorytwin", "mt", "mcp"]
         install_method = "uvx"
     else:
-        # Opción 3: Usar Python del entorno actual
+        # Option 3: Use current environment's Python
         python_exe = sys.executable
         mcp_command = python_exe
         mcp_args = ["-m", "memorytwin.escriba.cli", "mcp"]
         install_method = "python"
-    
-    # Contenido de las instrucciones para Copilot
-    instructions_content = '''# Memory Twin - Instrucciones para Agentes IA
+
+    # Copilot instructions content
+    instructions_content = '''# Memory Twin - Instructions for AI Agents
 
 ---
-## 🚨 REGLA OBLIGATORIA - LEER PRIMERO 🚨
+## 🚨 MANDATORY RULE - READ FIRST 🚨
 
-**ANTES de responder CUALQUIER pregunta técnica, DEBO ejecutar:**
+**BEFORE answering ANY technical question, I MUST run:**
 
 ```
-get_project_context(topic="<términos relevantes de la pregunta del usuario>")
+get_project_context(topic="<relevant terms from the user's question>")
 ```
 
-**NO HAY EXCEPCIONES.** Si no consulto la memoria primero, puedo:
-- Sugerir soluciones que ya fallaron
-- Ignorar decisiones de arquitectura previas
-- Repetir errores que ya resolvimos
-- Contradecir el estilo/convenciones del proyecto
+**NO EXCEPTIONS.** If I don't check memory first, I may:
+- Suggest solutions that already failed
+- Ignore previous architecture decisions
+- Repeat errors we already solved
+- Contradict the project's style/conventions
 
-**Mi primera acción SIEMPRE es obtener contexto del proyecto. SIEMPRE.**
+**My first action is ALWAYS to get project context. ALWAYS.**
 
-## 🛠️ Disponibilidad de Herramientas
-Estas instrucciones asumen que el servidor MCP de MemoryTwin está activo.
-- Si la herramienta `get_project_context` falla o no está disponible:
-1. NOTIFÍCAME inmediatamente: "⚠️ No puedo acceder a mi memoria. Verifica el servidor MCP."
-2. Pídeme que te pegue el contexto manualmente si es crítico.
+## 🛠️ Tool Availability
+These instructions assume the MemoryTwin MCP server is active.
+- If the `get_project_context` tool fails or is not available:
+1. NOTIFY ME immediately: "⚠️ I cannot access my memory. Check the MCP server."
+2. Ask me to paste the context manually if it's critical.
 
 ---
 
-## ¿Qué es Memory Twin?
-Sistema de memoria episódica que captura el razonamiento técnico para evitar "amnesia técnica" en proyectos.
+## What is Memory Twin?
+Episodic memory system that captures technical reasoning to prevent "technical amnesia" in projects.
 
-## ⚡ PROTOCOLO DE CONSULTA OBLIGATORIO
+## ⚡ MANDATORY QUERY PROTOCOL
 
-### PASO 1: Obtener contexto (OBLIGATORIO)
-Antes de escribir CUALQUIER respuesta técnica:
+### STEP 1: Get context (MANDATORY)
+Before writing ANY technical response:
 
 ```
-get_project_context(topic="<palabras clave de la pregunta>")
+get_project_context(topic="<keywords from the question>")
 ```
 
-Esta herramienta es INTELIGENTE:
-- Si hay **pocas memorias (<20)**: devuelve TODO el contexto del proyecto
-- Si hay **muchas memorias (>=20)**: devuelve estadísticas + recientes + relevantes al topic
+This tool is SMART:
+- If there are **few memories (<20)**: returns ALL project context
+- If there are **many memories (>=20)**: returns statistics + recent + relevant to the topic
 
-**Nota Importante:**
-Esta herramienta activa el mecanismo de **"Forgetting Curve"**. Al consultar memorias relevantes, incrementas su `access_count`, evitando que el sistema las "olvide" con el tiempo. ¡Consultar es reforzar!
+**Important Note:**
+This tool activates the **"Forgetting Curve"** mechanism. By querying relevant memories, you increase their `access_count`, preventing the system from "forgetting" them over time. Querying is reinforcing!
 
-Ejemplos de consultas:
-- Usuario pregunta sobre autenticación → `get_project_context(topic="autenticación login JWT")`
-- Usuario tiene un error → `get_project_context(topic="error <tipo de error>")`
-- Usuario quiere implementar feature → `get_project_context(topic="<nombre feature>")`
-- Usuario pregunta arquitectura → `get_project_context(topic="arquitectura diseño")`
+Query examples:
+- User asks about authentication → `get_project_context(topic="authentication login JWT")`
+- User has an error → `get_project_context(topic="error <error type>")`
+- User wants to implement a feature → `get_project_context(topic="<feature name>")`
+- User asks about architecture → `get_project_context(topic="architecture design")`
 
-### PASO 2: Analizar resultados
-- Si hay memorias relevantes → Incorporar ese conocimiento
-- Si no hay resultados → Proceder normalmente, pero considerar capturar después
+### STEP 2: Analyze results
+- If there are relevant memories → Incorporate that knowledge
+- If no results → Proceed normally, but consider capturing afterwards
 
-### PASO 3: Responder mencionando contexto
-- "Según memorias previas del proyecto..."
-- "No encontré decisiones previas sobre esto, procedo con..."
-- "Esto ya se resolvió anteriormente, la solución fue..."
+### STEP 3: Respond mentioning context
+- "According to previous project memories..."
+- "I found no previous decisions about this, proceeding with..."
+- "This was already solved before, the solution was..."
 
-### Cuándo consultar (SIEMPRE que aplique):
-| Situación | Consulta obligatoria |
+### When to query (ALWAYS when applicable):
+| Situation | Mandatory query |
 |-----------|---------------------|
-| Pregunta técnica | `get_project_context(topic="<tema>")` |
-| Error/Bug | `get_project_context(topic="error <descripción>")` |
-| Nueva feature | `get_project_context(topic="<feature>")` + `get_lessons()` |
-| Decisión de arquitectura | `query_memory("<pregunta>")` |
-| Primera vez en proyecto | `onboard_project("<ruta>")` |
-| Elegir librería/enfoque | `get_project_context(topic="<opciones>")` |
+| Technical question | `get_project_context(topic="<topic>")` |
+| Error/Bug | `get_project_context(topic="error <description>")` |
+| New feature | `get_project_context(topic="<feature>")` + `get_lessons()` |
+| Architecture decision | `query_memory("<question>")` |
+| First time in project | `onboard_project("<path>")` |
+| Choose library/approach | `get_project_context(topic="<options>")` |
 
-## Herramientas MCP Disponibles
+## Available MCP Tools
 
-### `get_project_context` - ⭐ HERRAMIENTA PRINCIPAL
-**Usar SIEMPRE antes de cualquier respuesta técnica.**
+### `get_project_context` - ⭐ MAIN TOOL
+**ALWAYS use before any technical response.**
 
-Comportamiento inteligente:
-- **Pocas memorias (<20)**: Devuelve TODO el contexto completo
-- **Muchas memorias (>=20)**: Devuelve estadísticas + 5 recientes + 5 relevantes al topic
+Smart behavior:
+- **Few memories (<20)**: Returns ALL complete context
+- **Many memories (>=20)**: Returns statistics + 5 recent + 5 relevant to the topic
 
-**Nota Importante:**
-Esta herramienta activa el mecanismo de **"Forgetting Curve"**. Al consultar memorias relevantes, incrementas su `access_count`, evitando que el sistema las "olvide" con el tiempo. ¡Consultar es reforzar!
+**Important Note:**
+This tool activates the **"Forgetting Curve"** mechanism. By querying relevant memories, you increase their `access_count`, preventing the system from "forgetting" them over time. Querying is reinforcing!
 
-Parámetros:
-- `topic` (opcional): Tema para búsqueda semántica
-- `project_name` (opcional): Filtrar por proyecto
+Parameters:
+- `topic` (optional): Topic for semantic search
+- `project_name` (optional): Filter by project
 
-### `capture_thinking` - 🔴 CAPTURA OBLIGATORIA
-**DEBO usar esta herramienta AUTOMÁTICAMENTE después de cualquier tarea técnica.**
+### `capture_thinking` - 🔴 MANDATORY CAPTURE
+**I MUST use this tool AUTOMATICALLY after any technical task.**
 
-**IMPORTANTE:** Esta es la **ÚNICA** forma de persistir conocimiento. Si no la uso, el trabajo se pierde.
+**IMPORTANT:** This is the **ONLY** way to persist knowledge. If I don't use it, the work is lost.
 
-**💡 TIP:** Hay 3 formas de capturar, elige la más conveniente:
-1. `capture_quick` - ⚡ La más rápida (solo what + why)
-2. `capture_decision` - 🎯 Para decisiones (task + decision + reasoning)
-3. `capture_thinking` - 📝 Para texto libre extenso
+**💡 TIP:** There are 3 ways to capture, choose the most convenient:
+1. `capture_quick` - ⚡ The fastest (only what + why)
+2. `capture_decision` - 🎯 For decisions (task + decision + reasoning)
+3. `capture_thinking` - 📝 For extensive free text
 
-#### ✅ CAPTURAR SIEMPRE (sin excepción):
-- Resolví un bug o error (cualquiera, no importa si es "simple")
-- Tomé una decisión técnica (librería, patrón, enfoque)
-- Comparé alternativas antes de elegir
-- Descubrí algo inesperado (gotcha, edge case, comportamiento raro)
-- Modifiqué código existente (refactor, mejora, fix)
-- Implementé una feature nueva
-- Configuré algo (entorno, herramientas, dependencias)
-- Investigué documentación o código para entender algo
-- El usuario me pidió hacer algo y lo completé
-- Encontré un problema en documentación/código y lo corregí
+#### ✅ ALWAYS CAPTURE (no exceptions):
+- Fixed a bug or error (any, no matter if it's "simple")
+- Made a technical decision (library, pattern, approach)
+- Compared alternatives before choosing
+- Discovered something unexpected (gotcha, edge case, weird behavior)
+- Modified existing code (refactor, improvement, fix)
+- Implemented a new feature
+- Configured something (environment, tools, dependencies)
+- Researched documentation or code to understand something
+- The user asked me to do something and I completed it
+- Found a problem in documentation/code and corrected it
 
-#### ❌ NO capturar SOLO cuando:
-- Respuesta puramente informativa sin acción (ej: "¿qué hora es?")
-- Conversación casual sin contenido técnico
-- El usuario explícitamente dice "no guardes esto"
+#### ❌ Do NOT capture ONLY when:
+- Purely informational response without action (e.g., "what time is it?")
+- Casual conversation without technical content
+- The user explicitly says "don't save this"
 
-#### 🎯 REGLA DE ORO: Ante la duda, CAPTURAR
-Es mejor tener una memoria "de más" que perder conocimiento valioso.
+#### 🎯 GOLDEN RULE: When in doubt, CAPTURE
+It's better to have an "extra" memory than to lose valuable knowledge.
 
-Parámetros:
-- `thinking_text` (requerido): Texto de razonamiento del modelo
-- `user_prompt` (opcional): Prompt original del usuario
-- `code_changes` (opcional): Cambios de código asociados
-- `source_assistant` (opcional): copilot, claude, cursor, etc.
-- `project_name` (opcional): Nombre del proyecto
+Parameters:
+- `thinking_text` (required): Model reasoning text
+- `user_prompt` (optional): Original user prompt
+- `code_changes` (optional): Associated code changes
+- `source_assistant` (optional): copilot, claude, cursor, etc.
+- `project_name` (optional): Project name
 
-### `capture_decision` - 🎯 CAPTURA ESTRUCTURADA (PREFERIDA)
-**Forma más conveniente de capturar decisiones técnicas.**
+### `capture_decision` - 🎯 STRUCTURED CAPTURE (PREFERRED)
+**Most convenient way to capture technical decisions.**
 
-Usar cuando tengas los datos organizados en campos separados. Más cómodo que escribir texto libre.
+Use when you have data organized in separate fields. More convenient than writing free text.
 
-Parámetros:
-- `task` (requerido): Descripción breve de la tarea o problema
-- `decision` (requerido): La decisión o solución tomada
-- `reasoning` (requerido): Por qué se tomó esta decisión
-- `alternatives` (opcional): Array de alternativas consideradas
-- `lesson` (opcional): Lección aprendida para el futuro
-- `context` (opcional): Contexto adicional
-- `project_name` (opcional): Nombre del proyecto
+Parameters:
+- `task` (required): Brief description of the task or problem
+- `decision` (required): The decision or solution taken
+- `reasoning` (required): Why this decision was made
+- `alternatives` (optional): Array of alternatives considered
+- `lesson` (optional): Lesson learned for the future
+- `context` (optional): Additional context
+- `project_name` (optional): Project name
 
 **Ejemplo:**
 ```
 capture_decision(
-    task="Elegir base de datos",
+    task="Choose database",
     decision="PostgreSQL",
     alternatives=["MongoDB", "MySQL"],
-    reasoning="Necesitamos ACID y queries complejas",
-    lesson="Para datos relacionales con transacciones, SQL > NoSQL"
+    reasoning="We need ACID and complex queries",
+    lesson="For relational data with transactions, SQL > NoSQL"
 )
 ```
 
-### `capture_quick` - ⚡ CAPTURA RÁPIDA (MÍNIMO ESFUERZO)
-**La forma más simple de capturar. Solo 2 campos requeridos.**
+### `capture_quick` - ⚡ QUICK CAPTURE (MINIMUM EFFORT)
+**The simplest way to capture. Only 2 required fields.**
 
-Usar para capturas rápidas sin mucho detalle. Ideal cuando tienes prisa.
+Use for quick captures without much detail. Ideal when you're in a hurry.
 
-Parámetros:
-- `what` (requerido): ¿Qué hiciste? (acción realizada)
-- `why` (requerido): ¿Por qué lo hiciste? (razón)
-- `lesson` (opcional pero recomendado): Lección aprendida
-- `project_name` (opcional): Nombre del proyecto
+Parameters:
+- `what` (required): What did you do? (action performed)
+- `why` (required): Why did you do it? (reason)
+- `lesson` (optional but recommended): Lesson learned
+- `project_name` (optional): Project name
 
-**Ejemplos:**
+**Examples:**
 ```
 capture_quick(
-    what="Añadí retry logic al cliente HTTP",
-    why="Las llamadas a la API fallaban intermitentemente"
+    what="Added retry logic to HTTP client",
+    why="API calls were failing intermittently"
 )
 
 capture_quick(
-    what="Cambié de axios a fetch",
-    why="Reducir dependencias, fetch nativo es suficiente",
-    lesson="Evaluar siempre si una dependencia es realmente necesaria"
+    what="Switched from axios to fetch",
+    why="Reduce dependencies, native fetch is sufficient",
+    lesson="Always evaluate if a dependency is really necessary"
 )
 ```
 
-### `query_memory` - Consultar memorias con RAG
-Usar cuando:
-- El usuario pregunta "¿por qué hicimos X?"
-- El usuario pregunta "¿cómo resolvimos algo similar?"
-- Antes de tomar una decisión importante (consultar precedentes)
+### `query_memory` - Query memories with RAG
+Use when:
+- The user asks "why did we do X?"
+- The user asks "how did we solve something similar?"
+- Before making an important decision (check precedents)
 
-Parámetros:
-- `question` (requerido): Pregunta a responder
-- `project_name` (opcional): Filtrar por proyecto
-- `num_episodes` (opcional): Número de episodios a consultar (1-10, default: 5)
+Parameters:
+- `question` (required): Question to answer
+- `project_name` (optional): Filter by project
+- `num_episodes` (optional): Number of episodes to query (1-10, default: 5)
 
-### `search_episodes` - Búsqueda semántica de episodios
-Usar para búsquedas específicas de temas o tecnologías.
-Devuelve los episodios más relevantes para un término de búsqueda.
-*Nota: Los resultados consultados reciben un boost de relevancia para el futuro.*
+### `search_episodes` - Semantic episode search
+Use for specific searches on topics or technologies.
+Returns the most relevant episodes for a search term.
+*Note: Queried results receive a relevance boost for the future.*
 
-Parámetros:
-- `query` (requerido): Término de búsqueda
-- `project_name` (opcional): Filtrar por proyecto
-- `top_k` (opcional): Número de resultados (default: 5)
+Parameters:
+- `query` (required): Search term
+- `project_name` (optional): Filter by project
+- `top_k` (optional): Number of results (default: 5)
 
-### `get_episode` - Obtener episodio completo
-Usar cuando necesitas profundizar en los detalles de una decisión específica.
-Devuelve el contenido COMPLETO: thinking, alternativas, factores de decisión, contexto y lecciones.
+### `get_episode` - Get complete episode
+Use when you need to dive into the details of a specific decision.
+Returns the COMPLETE content: thinking, alternatives, decision factors, context and lessons.
 
-Parámetros:
-- `episode_id` (requerido): UUID del episodio a recuperar
+Parameters:
+- `episode_id` (required): UUID of the episode to retrieve
 
-### `get_lessons` - Lecciones aprendidas
-Usar para:
-- Onboarding de nuevos miembros
-- Revisión antes de empezar feature similar
-- El usuario pide "¿qué hemos aprendido sobre X?"
+### `get_lessons` - Lessons learned
+Use for:
+- Onboarding new members
+- Review before starting a similar feature
+- The user asks "what have we learned about X?"
 
-Parámetros:
-- `project_name` (opcional): Filtrar por proyecto
-- `tags` (opcional): Array de tags para filtrar
+Parameters:
+- `project_name` (optional): Filter by project
+- `tags` (optional): Array of tags to filter
 
-### `get_timeline` - Ver historial cronológico
-Usar para ver evolución cronológica del proyecto y entender qué se hizo cuándo.
+### `get_timeline` - View chronological history
+Use to see chronological evolution of the project and understand what was done when.
 
-Parámetros:
-- `project_name` (opcional): Filtrar por proyecto
-- `limit` (opcional): Máximo de episodios a retornar (default: 20)
+Parameters:
+- `project_name` (optional): Filter by project
+- `limit` (optional): Maximum episodes to return (default: 20)
 
-### `get_statistics` - Estadísticas de la memoria
-Obtiene estadísticas de la base de memoria: total de episodios, distribución por tipo y asistente.
+### `get_statistics` - Memory statistics
+Gets memory database statistics: total episodes, distribution by type and assistant.
 
-Parámetros:
-- `project_name` (opcional): Filtrar por proyecto
+Parameters:
+- `project_name` (optional): Filter by project
 
-### `onboard_project` - Onboarding de proyecto existente
-Usar cuando:
-- ✅ Es la primera vez que trabajo en este proyecto
-- ✅ El usuario pide "analiza el proyecto", "conoce el código"
-- ✅ Necesito entender la estructura antes de hacer cambios grandes
-- ✅ No hay memorias previas y quiero crear contexto inicial
+### `onboard_project` - Onboard existing project
+Use when:
+- ✅ It's the first time I work on this project
+- ✅ The user asks "analyze the project", "learn the code"
+- ✅ I need to understand the structure before making big changes
+- ✅ There are no previous memories and I want to create initial context
 
-Genera automáticamente un episodio con:
-- Stack tecnológico detectado
-- Patrones arquitectónicos
-- Dependencias principales
-- Convenciones de código
+Automatically generates an episode with:
+- Detected technology stack
+- Architectural patterns
+- Main dependencies
+- Code conventions
 
-Parámetros:
-- `project_path` (requerido): Ruta absoluta al proyecto
-- `project_name` (opcional): Nombre del proyecto (se detecta automáticamente)
+Parameters:
+- `project_path` (required): Absolute path to the project
+- `project_name` (optional): Project name (auto-detected)
 
-## Flujo de Trabajo OBLIGATORIO
+## MANDATORY Workflow
 
-### 🔄 CICLO COMPLETO (SIEMPRE):
+### 🔄 COMPLETE CYCLE (ALWAYS):
 ```
-1. INICIO: get_project_context(topic="...") 
-2. TRABAJO: Realizar la tarea solicitada
-3. FIN: capture_thinking(thinking_text="...") 
-```
-
-### Checklist antes de terminar respuesta:
-- [ ] ¿Consulté la memoria al inicio? Si no → HACERLO AHORA
-- [ ] ¿Hice algo técnico? Si sí → CAPTURAR MEMORIA
-- [ ] ¿Resolví un problema? Si sí → CAPTURAR MEMORIA  
-- [ ] ¿Tomé una decisión? Si sí → CAPTURAR MEMORIA
-- [ ] ¿Modifiqué código? Si sí → CAPTURAR MEMORIA
-- [ ] ¿Investigué algo? Si sí → CAPTURAR MEMORIA
-
-### ⚠️ RECORDATORIO CRÍTICO:
-**NO terminar una respuesta técnica sin haber ejecutado `capture_thinking`.**
-El conocimiento que no se captura, SE PIERDE PARA SIEMPRE.
-
-## Formato del Thinking a Capturar
-
-Incluir siempre que sea posible:
-- **Tarea**: Qué se intentaba resolver
-- **Contexto**: Estado inicial, restricciones
-- **Alternativas**: Opciones consideradas
-- **Decisión**: Qué se eligió y por qué
-- **Solución**: Cómo se implementó
-- **Lecciones**: Qué aprendimos
-
-## Ejemplo de Captura Automática
-
-```
-Cuando detecto que acabo de:
-1. Debuggear un error por más de 2 intercambios
-2. Comparar 2+ opciones antes de elegir
-3. Descubrir un comportamiento inesperado
-4. Implementar algo que requirió investigación
-
-→ Llamar a capture_thinking con el contexto completo
+1. START: get_project_context(topic="...")
+2. WORK: Perform the requested task
+3. END: capture_thinking(thinking_text="...")
 ```
 
-## 🚨 EJEMPLO DE FLUJO CORRECTO
+### Checklist before finishing response:
+- [ ] Did I check memory at the start? If not → DO IT NOW
+- [ ] Did I do something technical? If yes → CAPTURE MEMORY
+- [ ] Did I solve a problem? If yes → CAPTURE MEMORY
+- [ ] Did I make a decision? If yes → CAPTURE MEMORY
+- [ ] Did I modify code? If yes → CAPTURE MEMORY
+- [ ] Did I research something? If yes → CAPTURE MEMORY
 
-### Usuario pregunta: "¿Por qué falla mi función de login?"
+### ⚠️ CRITICAL REMINDER:
+**Do NOT finish a technical response without having run `capture_thinking`.**
+Knowledge that is not captured is LOST FOREVER.
+
+## Thinking Format to Capture
+
+Always include when possible:
+- **Task**: What was being solved
+- **Context**: Initial state, constraints
+- **Alternatives**: Options considered
+- **Decision**: What was chosen and why
+- **Solution**: How it was implemented
+- **Lessons**: What we learned
+
+## Automatic Capture Example
 
 ```
-# 1. PRIMERO: Consultar memoria
-get_project_context(topic="login autenticación error")
+When I detect that I just:
+1. Debugged an error for more than 2 exchanges
+2. Compared 2+ options before choosing
+3. Discovered unexpected behavior
+4. Implemented something that required research
 
-# 2. DESPUÉS: Trabajar en la solución
-[Analizar código, debuggear, encontrar el problema, proponer fix]
+→ Call capture_thinking with the full context
+```
 
-# 3. FINALMENTE: Capturar el conocimiento
+## 🚨 CORRECT FLOW EXAMPLE
+
+### User asks: "Why is my login function failing?"
+
+```
+# 1. FIRST: Query memory
+get_project_context(topic="login authentication error")
+
+# 2. THEN: Work on the solution
+[Analyze code, debug, find the problem, propose fix]
+
+# 3. FINALLY: Capture the knowledge
 capture_thinking(
-    thinking_text="## Tarea\\nResolver error en función login...\\n## Problema\\nEl token JWT...\\n## Solución\\n...\\n## Lecciones\\n...",
-    project_name="mi-proyecto",
+    thinking_text="## Task\\nResolve login function error...\\n## Problem\\nThe JWT token...\\n## Solution\\n...\\n## Lessons\\n...",
+    project_name="my-project",
     source_assistant="copilot"
 )
 ```
 
-**SI NO CAPTURO AL FINAL, ESTOY FALLANDO MI FUNCIÓN.**
+**IF I DON'T CAPTURE AT THE END, I'M FAILING MY PURPOSE.**
 
-## Proyecto Actual
-- **Nombre del proyecto**: Usar el nombre de la carpeta del workspace
-- **Source assistant**: "copilot" para GitHub Copilot
+## Current Project
+- **Project name**: Use the workspace folder name
+- **Source assistant**: "copilot" for GitHub Copilot
 '''
-    
-    # Configuración MCP para VS Code - usar comando detectado
+
+    # MCP configuration for VS Code - use detected command
     mcp_config = {
         "servers": {
             "memorytwin": {
@@ -747,25 +749,25 @@ capture_thinking(
             }
         }
     }
-    
+
     files_created = []
     files_updated = []
-    
-    # Crear directorio .vscode si no existe
+
+    # Create .vscode directory if it doesn't exist
     vscode_dir = project_path / ".vscode"
     vscode_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Escribir archivo de instrucciones estándar
+
+    # Write standard instructions file
     instructions_path = project_path / "AGENTS.md"
     instructions_path.write_text(instructions_content, encoding="utf-8")
     files_created.append(str(instructions_path.relative_to(project_path)))
-    
-    # Escribir mcp.json
+
+    # Write mcp.json
     mcp_path = vscode_dir / "mcp.json"
     mcp_path.write_text(json.dumps(mcp_config, indent=2), encoding="utf-8")
     files_created.append(str(mcp_path.relative_to(project_path)))
-    
-    # Crear .env si no existe
+
+    # Create .env if it doesn't exist
     env_path = project_path / ".env"
     if not env_path.exists():
         env_content = """# Memory Twin - Configuration
@@ -815,246 +817,244 @@ LLM_MODEL=amazon/nova-2-lite-v1:free
 """
         env_path.write_text(env_content, encoding="utf-8")
         files_created.append(".env")
-    
-    # Asegurar que .env y data/ están en .gitignore
+
+    # Ensure .env and data/ are in .gitignore
     gitignore_path = project_path / ".gitignore"
-    gitignore_updated = False
     if gitignore_path.exists():
         gitignore_content = gitignore_path.read_text(encoding="utf-8")
         new_entries = []
-        
+
         if ".env" not in gitignore_content:
             new_entries.append(".env")
-        
+
         if "data/" not in gitignore_content:
             new_entries.append("data/")
-            
+
         if new_entries:
             with open(gitignore_path, "a", encoding="utf-8") as f:
                 f.write("\n# Memory Twin\n")
                 for entry in new_entries:
                     f.write(f"{entry}\n")
-            gitignore_updated = True
             files_updated.append(".gitignore")
     else:
         gitignore_path.write_text("# Memory Twin\n.env\ndata/\n", encoding="utf-8")
         files_created.append(".gitignore")
-    
-    # Mostrar resumen
+
+    # Show summary
     files_list = "\n".join(f"  • [cyan]{f}[/cyan]" for f in files_created)
     updated_list = "\n".join(f"  • [yellow]{f}[/yellow]" for f in files_updated) if files_updated else ""
-    
-    # Mensaje según método de instalación
+
+    # Message based on installation method
     if install_method == "mt":
-        mcp_info = "[green]mt mcp[/green] (simple y universal)"
+        mcp_info = "[green]mt mcp[/green] (simple and universal)"
         portability_note = ""
     elif install_method == "uvx":
         mcp_info = "[green]uvx[/green] (universal)"
         portability_note = ""
     else:
-        mcp_info = f"[yellow]Python específico[/yellow]"
+        mcp_info = "[yellow]Environment-specific Python[/yellow]"
         portability_note = """
-[yellow]⚠️ Nota:[/yellow] La configuración usa la ruta de tu Python actual.
-   Para una configuración más portable, asegúrate de que 'mt' esté en PATH.
+[yellow]⚠️ Note:[/yellow] The configuration uses your current Python path.
+   For a more portable setup, make sure 'mt' is in your PATH.
 """
-    
+
     next_steps = """
-[bold]Próximos pasos:[/bold]
-  1. Edita [cyan].env[/cyan] y configura tu proveedor de LLM
-  2. Reinicia VS Code (F1 → "Developer: Reload Window")
-  3. Verifica en MCP: List Servers que memorytwin está conectado
-  4. ¡Listo! Copilot usará Memory Twin automáticamente
+[bold]Next steps:[/bold]
+  1. Edit [cyan].env[/cyan] and configure your LLM provider
+  2. Restart VS Code (F1 → "Developer: Reload Window")
+  3. Check MCP: List Servers to verify memorytwin is connected
+  4. Done! Copilot will use Memory Twin automatically
 """
-    
-    result_text = f"[bold green]✓ Memory Twin configurado![/bold green]\n\n"
-    result_text += f"[bold]Archivos creados:[/bold]\n{files_list}\n"
+
+    result_text = "[bold green]✓ Memory Twin configured![/bold green]\n\n"
+    result_text += f"[bold]Files created:[/bold]\n{files_list}\n"
     if updated_list:
-        result_text += f"\n[bold]Archivos actualizados:[/bold]\n{updated_list}\n"
+        result_text += f"\n[bold]Files updated:[/bold]\n{updated_list}\n"
     result_text += f"\n[bold]MCP Server:[/bold] {mcp_info}\n"
     if portability_note:
         result_text += portability_note
     result_text += next_steps
-    
+
     console.print(Panel(
         result_text,
-        title="🧠 Setup Completado",
+        title="🧠 Setup Complete",
         border_style="green"
     ))
 
 
 def handle_oraculo(args):
-    """Lanzar interfaz web (Oráculo)."""
+    """Launch web interface (Oráculo)."""
     from memorytwin.oraculo.app import main as launch_oraculo
     launch_oraculo()
 
 
 def main():
-    """Punto de entrada del CLI del Escriba."""
+    """Escriba CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="Memory Twin - Escriba: Captura de memoria técnica"
+        description="Memory Twin - Escriba: Technical memory capture"
     )
-    
-    subparsers = parser.add_subparsers(dest="command", help="Comandos disponibles")
-    
-    # Comando: capture
+
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # Command: capture
     capture_parser = subparsers.add_parser(
-        "capture", 
-        help="Capturar pensamiento desde archivo o clipboard"
+        "capture",
+        help="Capture thinking from file or clipboard"
     )
     capture_parser.add_argument(
         "--file", "-f",
-        help="Archivo con el texto de thinking"
+        help="File containing the thinking text"
     )
     capture_parser.add_argument(
         "--clipboard", "-c",
         action="store_true",
-        help="Capturar desde clipboard"
+        help="Capture from clipboard"
     )
     capture_parser.add_argument(
         "--assistant", "-a",
         default="unknown",
-        help="Asistente fuente (copilot, claude, cursor)"
+        help="Source assistant (copilot, claude, cursor)"
     )
     capture_parser.add_argument(
         "--project", "-p",
         default="default",
-        help="Nombre del proyecto"
+        help="Project name"
     )
-    
-    # Comando: stats
+
+    # Command: stats
     stats_parser = subparsers.add_parser(
         "stats",
-        help="Ver estadísticas de la memoria"
+        help="View memory statistics"
     )
     stats_parser.add_argument(
         "--project", "-p",
-        help="Filtrar por proyecto"
+        help="Filter by project"
     )
-    
-    # Comando: search
+
+    # Command: search
     search_parser = subparsers.add_parser(
         "search",
-        help="Buscar en la memoria"
+        help="Search the memory"
     )
     search_parser.add_argument(
         "query",
-        help="Texto de búsqueda"
+        help="Search text"
     )
     search_parser.add_argument(
         "--top", "-k",
         type=int,
         default=5,
-        help="Número de resultados"
+        help="Number of results"
     )
     search_parser.add_argument(
         "--project", "-p",
-        help="Filtrar por proyecto"
+        help="Filter by project"
     )
-    
-    # Comando: query (RAG)
+
+    # Command: query (RAG)
     query_parser = subparsers.add_parser(
         "query",
-        help="Consultar con RAG (respuesta generada)"
+        help="Query with RAG (generated answer)"
     )
     query_parser.add_argument(
         "question",
-        help="Pregunta a responder"
+        help="Question to answer"
     )
     query_parser.add_argument(
         "--project", "-p",
-        help="Filtrar por proyecto"
+        help="Filter by project"
     )
-    
-    # Comando: lessons
+
+    # Command: lessons
     lessons_parser = subparsers.add_parser(
         "lessons",
-        help="Ver lecciones aprendidas"
+        help="View lessons learned"
     )
     lessons_parser.add_argument(
         "--project", "-p",
-        help="Filtrar por proyecto"
+        help="Filter by project"
     )
-    
-    # Comando: setup
+
+    # Command: setup
     setup_parser = subparsers.add_parser(
         "setup",
-        help="Configurar Memory Twin en un proyecto (crea AGENTS.md)"
+        help="Configure Memory Twin in a project (creates AGENTS.md)"
     )
     setup_parser.add_argument(
         "path",
         nargs="?",
         default=".",
-        help="Ruta al proyecto (por defecto: directorio actual)"
+        help="Path to the project (default: current directory)"
     )
-    
-    # Comando: onboard
+
+    # Command: onboard
     onboard_parser = subparsers.add_parser(
         "onboard",
-        help="Analizar proyecto existente y crear memoria inicial de onboarding"
+        help="Analyze existing project and create initial onboarding memory"
     )
     onboard_parser.add_argument(
         "path",
         nargs="?",
         default=".",
-        help="Ruta al proyecto a analizar (por defecto: directorio actual)"
+        help="Path to the project to analyze (default: current directory)"
     )
     onboard_parser.add_argument(
         "--project", "-p",
-        help="Nombre del proyecto (se detecta automáticamente si no se especifica)"
+        help="Project name (auto-detected if not specified)"
     )
     onboard_parser.add_argument(
         "--verbose", "-v",
         action="store_true",
-        help="Mostrar texto completo del análisis"
-    )
-    
-    # Comando: health-check
-    health_parser = subparsers.add_parser(
-        "health-check",
-        help="Verificar integridad del sistema (SQLite + ChromaDB)"
-    )
-    
-    # Comando: consolidate
-    consolidate_parser = subparsers.add_parser(
-        "consolidate",
-        help="Consolidar episodios relacionados en meta-memorias"
-    )
-    
-    # Comando: mcp (lanzar servidor MCP)
-    mcp_parser = subparsers.add_parser(
-        "mcp",
-        help="Iniciar el servidor MCP para VS Code/Copilot"
+        help="Show full analysis text"
     )
 
-    # Comando: oraculo (interfaz web)
-    oraculo_parser = subparsers.add_parser(
+    # Command: health-check
+    subparsers.add_parser(
+        "health-check",
+        help="Verify system integrity (SQLite + ChromaDB)"
+    )
+
+    # Command: consolidate
+    consolidate_parser = subparsers.add_parser(
+        "consolidate",
+        help="Consolidate related episodes into meta-memories"
+    )
+
+    # Command: mcp (start MCP server)
+    subparsers.add_parser(
+        "mcp",
+        help="Start the MCP server for VS Code/Copilot"
+    )
+
+    # Command: oraculo (web interface)
+    subparsers.add_parser(
         "oraculo",
-        help="Abrir interfaz web para gestionar memorias"
+        help="Open web interface to manage memories"
     )
 
     consolidate_parser.add_argument(
         "--project", "-p",
         required=True,
-        help="Nombre del proyecto a consolidar"
+        help="Project name to consolidate"
     )
     consolidate_parser.add_argument(
         "--min-cluster", "-m",
         type=int,
         default=3,
-        help="Mínimo de episodios para formar un cluster (default: 3)"
+        help="Minimum episodes to form a cluster (default: 3)"
     )
     consolidate_parser.add_argument(
         "--verbose", "-v",
         action="store_true",
-        help="Mostrar detalles de cada meta-memoria generada"
+        help="Show details of each generated meta-memory"
     )
-    
+
     args = parser.parse_args()
-    
+
     if not args.command:
         parser.print_help()
         return
-        
+
     try:
         match args.command:
             case "capture":

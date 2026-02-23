@@ -1,10 +1,10 @@
 """
-Configuración global de pytest para Memory Twin.
+Global pytest configuration for Memory Twin.
 """
 import os
 
-# Desactivar Langfuse durante tests para evitar ruido en trazas de producción
-# Usamos LANGFUSE_HOST vacío para que falle silenciosamente al intentar conectar
+# Disable Langfuse during tests to avoid noise in production traces
+# We use an empty LANGFUSE_HOST so it fails silently when trying to connect
 os.environ["LANGFUSE_HOST"] = ""
 os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""

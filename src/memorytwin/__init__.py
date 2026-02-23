@@ -1,9 +1,9 @@
 """
-The Memory Twin - Agente de Memoria Episódica para Desarrollo de Software
-=========================================================================
+The Memory Twin - Episodic Memory Agent for Software Development
+================================================================
 
-Sistema de arquitectura dual (Escriba + Oráculo) diseñado para mitigar 
-la "amnesia técnica" en equipos de desarrollo.
+Dual-agent architecture (Escriba + Oráculo) designed to mitigate
+"technical amnesia" in development teams.
 """
 
 __version__ = "0.1.0"

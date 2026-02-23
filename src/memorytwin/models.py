@@ -1,9 +1,9 @@
 """
-Modelos de datos para The Memory Twin
-=====================================
+Data Models for Memory Twin
+============================
 
-Define los esquemas Pydantic para episodios de memoria, 
-metadatos y configuración del sistema.
+Defines Pydantic schemas for memory episodes,
+metadata, and system configuration.
 """
 
 from datetime import datetime, timezone
@@ -15,361 +15,361 @@ from pydantic import BaseModel, Field
 
 
 def _utc_now() -> datetime:
-    """Obtener datetime actual en UTC."""
+    """Return the current datetime in UTC."""
     return datetime.now(timezone.utc)
 
 
 class EpisodeType(str, Enum):
-    """Tipos de episodios de memoria capturados."""
-    
-    DECISION = "decision"           # Decisión técnica tomada
-    BUG_FIX = "bug_fix"             # Corrección de error
-    REFACTOR = "refactor"           # Refactorización de código
-    FEATURE = "feature"             # Nueva funcionalidad
-    OPTIMIZATION = "optimization"   # Mejora de rendimiento
-    LEARNING = "learning"           # Aprendizaje o descubrimiento
-    EXPERIMENT = "experiment"       # Prueba o experimento
+    """Types of captured memory episodes."""
+
+    DECISION = "decision"           # Technical decision made
+    BUG_FIX = "bug_fix"             # Bug fix
+    REFACTOR = "refactor"           # Code refactoring
+    FEATURE = "feature"             # New feature
+    OPTIMIZATION = "optimization"   # Performance improvement
+    LEARNING = "learning"           # Learning or discovery
+    EXPERIMENT = "experiment"       # Test or experiment
 
 
 class ReasoningTrace(BaseModel):
     """
-    Traza de razonamiento capturada del asistente de IA.
-    Representa el "thinking" visible del modelo.
+    Reasoning trace captured from an AI assistant.
+    Represents the model's visible "thinking" output.
     """
-    
+
     raw_thinking: str = Field(
-        ..., 
-        description="Texto crudo del razonamiento del modelo"
+        ...,
+        description="Raw reasoning text from the model"
     )
     alternatives_considered: list[str] = Field(
         default_factory=list,
-        description="Alternativas consideradas y descartadas"
+        description="Alternatives considered and discarded"
     )
     decision_factors: list[str] = Field(
         default_factory=list,
-        description="Factores que influyeron en la decisión"
+        description="Factors that influenced the decision"
     )
     confidence_level: Optional[float] = Field(
         default=None,
         ge=0.0,
         le=1.0,
-        description="Nivel de confianza en la decisión (0-1)"
+        description="Confidence level in the decision (0-1)"
     )
 
 
 class Episode(BaseModel):
     """
-    Episodio de memoria - Unidad fundamental de conocimiento.
-    
-    Captura el contexto completo de una decisión técnica:
-    qué se hizo, cómo se razonó y por qué.
-    
-    Incluye campos para la curva de olvido (forgetting curve):
-    - importance_score: relevancia base del episodio
-    - access_count: veces que ha sido recuperado
-    - last_accessed: última vez que fue consultado
+    Memory Episode - Fundamental unit of knowledge.
+
+    Captures the full context of a technical decision:
+    what was done, how it was reasoned, and why.
+
+    Includes fields for the forgetting curve:
+    - importance_score: base relevance of the episode
+    - access_count: number of times it has been retrieved
+    - last_accessed: last time it was queried
     """
-    
+
     id: UUID = Field(default_factory=uuid4)
     timestamp: datetime = Field(default_factory=_utc_now)
-    
-    # Contexto del episodio
+
+    # Episode context
     task: str = Field(
-        ..., 
-        description="Descripción de la tarea o problema abordado"
+        ...,
+        description="Description of the task or problem addressed"
     )
     context: str = Field(
-        ..., 
-        description="Contexto técnico: archivos, módulos, stack involucrado"
+        ...,
+        description="Technical context: files, modules, stack involved"
     )
-    
-    # Razonamiento
+
+    # Reasoning
     reasoning_trace: ReasoningTrace = Field(
         ...,
-        description="Traza del pensamiento del modelo"
+        description="Model's thinking trace"
     )
-    
-    # Solución
+
+    # Solution
     solution: str = Field(
-        ..., 
-        description="Código o solución implementada"
+        ...,
+        description="Code or implemented solution"
     )
     solution_summary: str = Field(
-        ..., 
-        description="Resumen ejecutivo de la solución"
+        ...,
+        description="Executive summary of the solution"
     )
-    
-    # Resultado
+
+    # Outcome
     outcome: Optional[str] = Field(
         default=None,
-        description="Resultado observado tras aplicar la solución"
+        description="Observed result after applying the solution"
     )
     success: bool = Field(
         default=True,
-        description="Si la solución fue exitosa"
+        description="Whether the solution was successful"
     )
-    
-    # Metadatos
+
+    # Metadata
     episode_type: EpisodeType = Field(
         default=EpisodeType.DECISION,
-        description="Tipo de episodio"
+        description="Episode type"
     )
     tags: list[str] = Field(
         default_factory=list,
-        description="Etiquetas para categorización"
+        description="Tags for categorization"
     )
     files_affected: list[str] = Field(
         default_factory=list,
-        description="Archivos modificados"
+        description="Modified files"
     )
-    
-    # Lecciones
+
+    # Lessons
     lessons_learned: list[str] = Field(
         default_factory=list,
-        description="Lecciones extraídas de este episodio"
+        description="Lessons extracted from this episode"
     )
-    
-    # Fuente
+
+    # Source
     source_assistant: str = Field(
         default="unknown",
-        description="Asistente de código fuente (copilot, claude, cursor)"
+        description="Source code assistant (copilot, claude, cursor)"
     )
     project_name: str = Field(
         default="default",
-        description="Nombre del proyecto asociado"
+        description="Associated project name"
     )
-    
-    # Campos para Forgetting Curve (curva de olvido)
+
+    # Forgetting Curve fields
     importance_score: float = Field(
         default=1.0,
         ge=0.0,
         le=1.0,
-        description="Relevancia base del episodio (0-1). Puede ajustarse automáticamente."
+        description="Base relevance of the episode (0-1). May be adjusted automatically."
     )
     access_count: int = Field(
         default=0,
         ge=0,
-        description="Número de veces que este episodio ha sido recuperado/consultado"
+        description="Number of times this episode has been retrieved/queried"
     )
     last_accessed: Optional[datetime] = Field(
         default=None,
-        description="Última vez que este episodio fue consultado"
+        description="Last time this episode was queried"
     )
-    
-    # Campos para memoria activa y útil
+
+    # Active and useful memory fields
     is_antipattern: bool = Field(
         default=False,
-        description="Si True, este episodio representa algo que NO se debe hacer. Se mostrará como ADVERTENCIA."
+        description="If True, this episode represents something NOT to do. Shown as a WARNING."
     )
     is_critical: bool = Field(
         default=False,
-        description="Si True, este episodio es crítico y debe priorizarse en búsquedas."
+        description="If True, this episode is critical and should be prioritized in searches."
     )
     superseded_by: Optional[UUID] = Field(
         default=None,
-        description="Si este episodio fue reemplazado por otro más reciente, referencia al nuevo."
+        description="If this episode was replaced by a newer one, reference to the new episode."
     )
     deprecation_reason: Optional[str] = Field(
         default=None,
-        description="Razón por la que este episodio ya no aplica o fue marcado como antipattern."
+        description="Reason why this episode no longer applies or was marked as an antipattern."
     )
 
 
 class MemoryQuery(BaseModel):
-    """Consulta al sistema de memoria del Oráculo."""
-    
+    """Query to the Oráculo memory system."""
+
     query: str = Field(
         ...,
-        description="Pregunta o búsqueda del usuario"
+        description="User's question or search text"
     )
     project_filter: Optional[str] = Field(
         default=None,
-        description="Filtrar por proyecto específico"
+        description="Filter by specific project"
     )
     type_filter: Optional[EpisodeType] = Field(
         default=None,
-        description="Filtrar por tipo de episodio"
+        description="Filter by episode type"
     )
     date_from: Optional[datetime] = Field(
         default=None,
-        description="Fecha inicio del rango de búsqueda"
+        description="Start date for search range"
     )
     date_to: Optional[datetime] = Field(
         default=None,
-        description="Fecha fin del rango de búsqueda"
+        description="End date for search range"
     )
     tags_filter: list[str] = Field(
         default_factory=list,
-        description="Filtrar por etiquetas"
+        description="Filter by tags"
     )
     top_k: int = Field(
         default=5,
         ge=1,
         le=20,
-        description="Número de resultados a retornar"
+        description="Number of results to return"
     )
 
 
 class MemorySearchResult(BaseModel):
-    """Resultado de búsqueda en la memoria."""
-    
+    """Memory search result."""
+
     episode: Episode
     relevance_score: float = Field(
         ge=0.0,
         le=1.0,
-        description="Puntuación de relevancia semántica"
+        description="Semantic relevance score"
     )
     match_reason: str = Field(
         default="",
-        description="Explicación de por qué este resultado es relevante"
+        description="Explanation of why this result is relevant"
     )
 
 
 class ProcessedInput(BaseModel):
     """
-    Input procesado del Escriba.
-    Representa el texto capturado antes de ser convertido en Episode.
+    Escriba's processed input.
+    Represents captured text before being converted into an Episode.
     """
-    
+
     raw_text: str = Field(
         ...,
-        description="Texto crudo capturado (thinking del modelo)"
+        description="Raw captured text (model's thinking)"
     )
     user_prompt: Optional[str] = Field(
         default=None,
-        description="Prompt original del usuario"
+        description="Original user prompt"
     )
     code_changes: Optional[str] = Field(
         default=None,
-        description="Cambios de código asociados (diff o código nuevo)"
+        description="Associated code changes (diff or new code)"
     )
     source: str = Field(
         default="manual",
-        description="Fuente de captura: manual, clipboard, mcp"
+        description="Capture source: manual, clipboard, mcp"
     )
     captured_at: datetime = Field(default_factory=_utc_now)
 
 
 class MetaMemory(BaseModel):
     """
-    Meta-Memoria - Conocimiento consolidado de múltiples episodios.
-    
-    Representa patrones, lecciones y conocimiento emergente que
-    surge del análisis de episodios relacionados. Se genera mediante
-    clustering y síntesis con LLM.
-    
-    Ejemplo: Si hay 5 episodios sobre "manejo de errores en APIs",
-    se consolidan en una MetaMemory con el patrón común, lecciones
-    agregadas y excepciones importantes.
+    Meta-Memory - Consolidated knowledge from multiple episodes.
+
+    Represents patterns, lessons, and emergent knowledge that
+    arises from analyzing related episodes. Generated through
+    clustering and LLM synthesis.
+
+    Example: If there are 5 episodes about "API error handling",
+    they are consolidated into a MetaMemory with the common pattern,
+    aggregated lessons, and important exceptions.
     """
-    
+
     id: UUID = Field(default_factory=uuid4)
     created_at: datetime = Field(default_factory=_utc_now)
     updated_at: datetime = Field(default_factory=_utc_now)
-    
-    # Patrón identificado
+
+    # Identified pattern
     pattern: str = Field(
         ...,
-        description="Patrón o tema común identificado en los episodios fuente"
+        description="Common pattern or theme identified across source episodes"
     )
     pattern_summary: str = Field(
         ...,
-        description="Resumen ejecutivo del patrón (1-2 oraciones)"
+        description="Executive summary of the pattern (1-2 sentences)"
     )
-    
-    # Conocimiento consolidado
+
+    # Consolidated knowledge
     lessons: list[str] = Field(
         default_factory=list,
-        description="Lecciones aprendidas consolidadas de todos los episodios"
+        description="Consolidated lessons learned from all episodes"
     )
     best_practices: list[str] = Field(
         default_factory=list,
-        description="Mejores prácticas derivadas del patrón"
+        description="Best practices derived from the pattern"
     )
     antipatterns: list[str] = Field(
         default_factory=list,
-        description="Anti-patrones o errores comunes a evitar"
+        description="Anti-patterns or common mistakes to avoid"
     )
-    
-    # Excepciones y matices
+
+    # Exceptions and nuances
     exceptions: list[str] = Field(
         default_factory=list,
-        description="Casos especiales donde el patrón no aplica"
+        description="Special cases where the pattern does not apply"
     )
     edge_cases: list[str] = Field(
         default_factory=list,
-        description="Casos límite descubiertos"
+        description="Discovered edge cases"
     )
-    
-    # Contextos aplicables
+
+    # Applicable contexts
     contexts: list[str] = Field(
         default_factory=list,
-        description="Contextos donde este conocimiento es aplicable"
+        description="Contexts where this knowledge is applicable"
     )
     technologies: list[str] = Field(
         default_factory=list,
-        description="Tecnologías relacionadas (lenguajes, frameworks, libs)"
+        description="Related technologies (languages, frameworks, libs)"
     )
-    
-    # Trazabilidad
+
+    # Traceability
     source_episode_ids: list[UUID] = Field(
         default_factory=list,
-        description="IDs de episodios fuente que originaron esta meta-memoria"
+        description="IDs of source episodes that originated this meta-memory"
     )
     episode_count: int = Field(
         default=0,
         ge=0,
-        description="Número de episodios consolidados"
+        description="Number of consolidated episodes"
     )
-    
-    # Calidad y confianza
+
+    # Quality and confidence
     confidence: float = Field(
         default=0.5,
         ge=0.0,
         le=1.0,
-        description="Confianza en la consolidación (0-1). Mayor con más episodios."
+        description="Consolidation confidence (0-1). Higher with more episodes."
     )
     coherence_score: float = Field(
         default=0.5,
         ge=0.0,
         le=1.0,
-        description="Qué tan coherentes son los episodios fuente entre sí"
+        description="How coherent the source episodes are with each other"
     )
-    
-    # Metadatos
+
+    # Metadata
     project_name: str = Field(
         default="default",
-        description="Proyecto asociado"
+        description="Associated project"
     )
     tags: list[str] = Field(
         default_factory=list,
-        description="Etiquetas para categorización"
+        description="Tags for categorization"
     )
-    
-    # Uso y relevancia
+
+    # Usage and relevance
     access_count: int = Field(
         default=0,
         ge=0,
-        description="Veces que esta meta-memoria ha sido consultada"
+        description="Number of times this meta-memory has been queried"
     )
     last_accessed: Optional[datetime] = Field(
         default=None,
-        description="Última consulta"
+        description="Last query time"
     )
 
 
 class MetaMemorySearchResult(BaseModel):
-    """Resultado de búsqueda en meta-memorias."""
-    
+    """Meta-memory search result."""
+
     meta_memory: MetaMemory
     relevance_score: float = Field(
         ge=0.0,
         le=1.0,
-        description="Puntuación de relevancia semántica"
+        description="Semantic relevance score"
     )
     match_reason: str = Field(
         default="",
-        description="Explicación de por qué este resultado es relevante"
+        description="Explanation of why this result is relevant"
     )
 
 

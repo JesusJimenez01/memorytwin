@@ -1,30 +1,31 @@
 """
-Tests para el servidor MCP
+Tests for the MCP server
 ==========================
 
-Tests unitarios para MemoryTwinMCPServer.
+Unit tests for MemoryTwinMCPServer.
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
+
+import pytest
 
 from memorytwin.models import (
     Episode,
     EpisodeType,
-    ReasoningTrace,
     MemorySearchResult,
+    ReasoningTrace,
 )
 
 
 class TestMCPServerHelpers:
-    """Tests para funciones auxiliares del servidor MCP."""
+    """Tests for MCP server helper functions."""
 
     def test_format_lessons_with_datetime(self):
-        """Test de formateo de lecciones con datetime."""
+        """Test for lessons formatting with datetime."""
         from memorytwin.mcp_server.server import _format_lessons
-        
+
         lessons = [
             {
                 "lesson": "Test lesson",
@@ -37,9 +38,9 @@ class TestMCPServerHelpers:
                 "tags": ["tag1", "tag2"]
             }
         ]
-        
+
         result = _format_lessons(lessons)
-        
+
         assert len(result) == 2
         assert result[0]["timestamp"] == "2025-01-15T10:30:00"
         assert result[1]["timestamp"] == "2025-01-16T14:00:00"
@@ -47,43 +48,43 @@ class TestMCPServerHelpers:
         assert result[1]["tags"] == ["tag1", "tag2"]
 
     def test_format_lessons_without_datetime(self):
-        """Test de formateo de lecciones sin datetime."""
+        """Test for lessons formatting without datetime."""
         from memorytwin.mcp_server.server import _format_lessons
-        
+
         lessons = [
             {
                 "lesson": "Simple lesson",
                 "count": 5
             }
         ]
-        
+
         result = _format_lessons(lessons)
-        
+
         assert result[0]["lesson"] == "Simple lesson"
         assert result[0]["count"] == 5
 
     def test_format_lessons_empty(self):
-        """Test de formateo de lista vacía."""
+        """Test for empty list formatting."""
         from memorytwin.mcp_server.server import _format_lessons
-        
+
         result = _format_lessons([])
-        
+
         assert result == []
 
 
 class TestMCPServerInit:
-    """Tests para inicialización del servidor MCP."""
+    """Tests for MCP server initialization."""
 
     @patch("memorytwin.mcp_server.server.Server")
     def test_server_initialization(self, mock_server_class):
-        """Test de inicialización del servidor."""
+        """Test for server initialization."""
         from memorytwin.mcp_server.server import MemoryTwinMCPServer
-        
+
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
-        
+
         mcp_server = MemoryTwinMCPServer()
-        
+
         mock_server_class.assert_called_once_with("memorytwin")
         assert mcp_server.processor is None  # Lazy init
         assert mcp_server.storage is None
@@ -100,28 +101,28 @@ class TestMCPServerInit:
         mock_processor,
         mock_server_class
     ):
-        """Test de inicialización lazy de componentes."""
+        """Test for lazy initialization of components."""
         from memorytwin.mcp_server.server import MemoryTwinMCPServer
-        
+
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
-        
+
         storage_instance = MagicMock()
         mock_storage.return_value = storage_instance
-        
+
         mcp_server = MemoryTwinMCPServer()
-        
-        # Antes de lazy_init
+
+        # Before lazy_init
         assert mcp_server.processor is None
-        
-        # Llamar lazy_init
+
+        # Call lazy_init
         mcp_server._lazy_init()
-        
-        # Después de lazy_init
+
+        # After lazy_init
         mock_processor.assert_called_once()
         mock_storage.assert_called_once()
         mock_rag.assert_called_once_with(storage=storage_instance)
-        
+
         assert mcp_server.processor is not None
         assert mcp_server.storage is not None
         assert mcp_server.rag_engine is not None
@@ -137,44 +138,44 @@ class TestMCPServerInit:
         mock_processor,
         mock_server_class
     ):
-        """Test que lazy_init solo se ejecuta una vez."""
+        """Test that lazy_init only executes once."""
         from memorytwin.mcp_server.server import MemoryTwinMCPServer
-        
+
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
-        
+
         mcp_server = MemoryTwinMCPServer()
-        
-        # Llamar múltiples veces
+
+        # Call multiple times
         mcp_server._lazy_init()
         mcp_server._lazy_init()
         mcp_server._lazy_init()
-        
-        # Solo debe inicializar una vez
+
+        # Should only initialize once
         assert mock_processor.call_count == 1
         assert mock_storage.call_count == 1
 
 
 class TestMCPServerTools:
-    """Tests para las herramientas del servidor MCP."""
+    """Tests for MCP server tools."""
 
     @pytest.fixture
     def sample_episode(self):
-        """Episodio de ejemplo."""
+        """Sample episode."""
         return Episode(
             id=uuid4(),
-            task="Implementar autenticación JWT",
-            context="API REST con FastAPI",
+            task="Implement JWT authentication",
+            context="REST API with FastAPI",
             reasoning_trace=ReasoningTrace(
-                raw_thinking="Elegí JWT por escalabilidad",
+                raw_thinking="I chose JWT for scalability",
                 alternatives_considered=["Sessions"],
                 decision_factors=["Stateless"]
             ),
             solution="from jose import jwt",
-            solution_summary="JWT con tokens de 24h",
+            solution_summary="JWT with 24h tokens",
             episode_type=EpisodeType.FEATURE,
             tags=["auth", "jwt"],
-            lessons_learned=["Validar algoritmo"],
+            lessons_learned=["Validate algorithm"],
             project_name="test-project",
             source_assistant="copilot"
         )
@@ -191,24 +192,24 @@ class TestMCPServerTools:
         mock_processor,
         mock_server_class
     ):
-        """Test de herramienta get_statistics."""
+        """Test for get_statistics tool."""
         from memorytwin.mcp_server.server import MemoryTwinMCPServer
-        
+
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
-        
+
         mock_storage = MagicMock()
         mock_storage.get_statistics.return_value = {
             "total_episodes": 15,
             "by_type": {"feature": 10, "bug_fix": 5}
         }
         mock_storage_class.return_value = mock_storage
-        
+
         mcp_server = MemoryTwinMCPServer()
         mcp_server._lazy_init()
-        
+
         result = await mcp_server._get_statistics({"project_name": "test"})
-        
+
         assert result.isError is False
         mock_storage.get_statistics.assert_called_once_with("test")
 
@@ -225,15 +226,15 @@ class TestMCPServerTools:
         mock_server_class,
         sample_episode
     ):
-        """Test de herramienta get_timeline."""
+        """Test for get_timeline tool."""
         from memorytwin.mcp_server.server import MemoryTwinMCPServer
-        
+
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
-        
+
         mock_storage = MagicMock()
         mock_storage_class.return_value = mock_storage
-        
+
         mock_rag = MagicMock()
         mock_rag.get_timeline.return_value = [
             {
@@ -243,12 +244,12 @@ class TestMCPServerTools:
             }
         ]
         mock_rag_class.return_value = mock_rag
-        
+
         mcp_server = MemoryTwinMCPServer()
         mcp_server._lazy_init()
-        
+
         result = await mcp_server._get_timeline({"limit": 10})
-        
+
         assert result.isError is False
         mock_rag.get_timeline.assert_called_once()
 
@@ -264,12 +265,12 @@ class TestMCPServerTools:
         mock_processor,
         mock_server_class
     ):
-        """Test de herramienta get_lessons."""
+        """Test for get_lessons tool."""
         from memorytwin.mcp_server.server import MemoryTwinMCPServer
-        
+
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
-        
+
         mock_storage = MagicMock()
         mock_storage.get_lessons_learned.return_value = [
             {
@@ -279,12 +280,12 @@ class TestMCPServerTools:
             }
         ]
         mock_storage_class.return_value = mock_storage
-        
+
         mcp_server = MemoryTwinMCPServer()
         mcp_server._lazy_init()
-        
+
         result = await mcp_server._get_lessons({"project_name": "test"})
-        
+
         assert result.isError is False
 
     @patch("memorytwin.mcp_server.server.Server")
@@ -300,21 +301,21 @@ class TestMCPServerTools:
         mock_server_class,
         sample_episode
     ):
-        """Test de herramienta get_episode."""
+        """Test for get_episode tool."""
         from memorytwin.mcp_server.server import MemoryTwinMCPServer
-        
+
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
-        
+
         mock_storage = MagicMock()
         mock_storage.get_episode_by_id.return_value = sample_episode
         mock_storage_class.return_value = mock_storage
-        
+
         mcp_server = MemoryTwinMCPServer()
         mcp_server._lazy_init()
-        
+
         result = await mcp_server._get_episode({"episode_id": str(sample_episode.id)})
-        
+
         assert result.isError is False
         mock_storage.get_episode_by_id.assert_called_once_with(str(sample_episode.id))
 
@@ -330,24 +331,24 @@ class TestMCPServerTools:
         mock_processor,
         mock_server_class
     ):
-        """Test de herramienta get_episode cuando no existe."""
+        """Test for get_episode tool when it doesn't exist."""
         from memorytwin.mcp_server.server import MemoryTwinMCPServer
-        
+
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
-        
+
         mock_storage = MagicMock()
         mock_storage.get_episode_by_id.return_value = None
         mock_storage_class.return_value = mock_storage
-        
+
         mcp_server = MemoryTwinMCPServer()
         mcp_server._lazy_init()
-        
+
         result = await mcp_server._get_episode({"episode_id": "non-existent-id"})
-        
-        # Debe indicar que no se encontró
+
+        # Should indicate it was not found
         content = result.content[0].text
-        assert "no se encontr" in content.lower() or "not found" in content.lower()
+        assert "not found" in content.lower()
 
     @patch("memorytwin.mcp_server.server.Server")
     @patch("memorytwin.mcp_server.server.ThoughtProcessor")
@@ -362,32 +363,32 @@ class TestMCPServerTools:
         mock_server_class,
         sample_episode
     ):
-        """Test de herramienta search_episodes."""
+        """Test for search_episodes tool."""
         from memorytwin.mcp_server.server import MemoryTwinMCPServer
-        
+
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
-        
+
         mock_storage = MagicMock()
         mock_storage.search_episodes.return_value = [
             MemorySearchResult(episode=sample_episode, relevance_score=0.9)
         ]
         mock_storage_class.return_value = mock_storage
-        
+
         mcp_server = MemoryTwinMCPServer()
         mcp_server._lazy_init()
-        
+
         result = await mcp_server._search_episodes({
-            "query": "autenticación",
+            "query": "authentication",
             "top_k": 5
         })
-        
+
         assert result.isError is False
         mock_storage.search_episodes.assert_called_once()
 
 
 class TestMCPServerCaptureThinking:
-    """Tests para capture_thinking del servidor MCP."""
+    """Tests for MCP server capture_thinking."""
 
     @patch("memorytwin.mcp_server.server.Server")
     @patch("memorytwin.mcp_server.server.ThoughtProcessor")
@@ -401,16 +402,16 @@ class TestMCPServerCaptureThinking:
         mock_processor_class,
         mock_server_class
     ):
-        """Test de captura exitosa de pensamiento."""
+        """Test for successful thought capture."""
         from memorytwin.mcp_server.server import MemoryTwinMCPServer
-        
+
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
-        
+
         mock_storage = MagicMock()
         mock_storage.store_episode.return_value = "test-episode-id"
         mock_storage_class.return_value = mock_storage
-        
+
         sample_episode = Episode(
             id=uuid4(),
             task="Test task",
@@ -423,21 +424,21 @@ class TestMCPServerCaptureThinking:
             lessons_learned=["lesson1"],
             project_name="test"
         )
-        
+
         mock_processor = MagicMock()
         mock_processor.process_thought = AsyncMock(return_value=sample_episode)
         mock_processor_class.return_value = mock_processor
-        
+
         mcp_server = MemoryTwinMCPServer()
         mcp_server._lazy_init()
-        
+
         result = await mcp_server._capture_thinking({
-            "thinking_text": "Mi razonamiento aquí",
-            "user_prompt": "Prompt del usuario",
+            "thinking_text": "My reasoning here",
+            "user_prompt": "User prompt",
             "project_name": "test-project",
             "source_assistant": "copilot"
         })
-        
+
         assert result.isError is False
         content = result.content[0].text
         assert "test-episode-id" in content
@@ -445,7 +446,7 @@ class TestMCPServerCaptureThinking:
 
 
 class TestMCPServerCaptureDecision:
-    """Tests para capture_decision del servidor MCP."""
+    """Tests for MCP server capture_decision."""
 
     @patch("memorytwin.mcp_server.server.Server")
     @patch("memorytwin.mcp_server.server.ThoughtProcessor")
@@ -459,46 +460,46 @@ class TestMCPServerCaptureDecision:
         mock_processor_class,
         mock_server_class
     ):
-        """Test de captura exitosa de decisión estructurada."""
+        """Test for successful structured decision capture."""
         from memorytwin.mcp_server.server import MemoryTwinMCPServer
-        
+
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
-        
+
         mock_storage = MagicMock()
         mock_storage.store_episode.return_value = "decision-episode-id"
         mock_storage_class.return_value = mock_storage
-        
+
         sample_episode = Episode(
             id=uuid4(),
-            task="Elegir base de datos",
+            task="Choose database",
             context="Test context",
             reasoning_trace=ReasoningTrace(raw_thinking="test"),
             solution="PostgreSQL",
-            solution_summary="Se eligió PostgreSQL",
+            solution_summary="PostgreSQL was chosen",
             episode_type=EpisodeType.DECISION,
             tags=["database", "postgresql"],
-            lessons_learned=["Para datos relacionales, SQL es mejor"],
+            lessons_learned=["For relational data, SQL is better"],
             project_name="test"
         )
-        
+
         mock_processor = MagicMock()
         mock_processor.process_thought = AsyncMock(return_value=sample_episode)
         mock_processor_class.return_value = mock_processor
-        
+
         mcp_server = MemoryTwinMCPServer()
         mcp_server._lazy_init()
-        
+
         result = await mcp_server._capture_decision({
-            "task": "Elegir base de datos para el proyecto",
+            "task": "Choose database for the project",
             "decision": "PostgreSQL",
             "alternatives": ["MongoDB", "MySQL", "SQLite"],
-            "reasoning": "Necesitamos transacciones ACID y queries complejas",
-            "lesson": "Para datos relacionales con transacciones, SQL > NoSQL",
+            "reasoning": "We need ACID transactions and complex queries",
+            "lesson": "For relational data with transactions, SQL > NoSQL",
             "project_name": "test-project",
             "source_assistant": "copilot"
         })
-        
+
         assert result.isError is False
         content = result.content[0].text
         assert "decision-episode-id" in content
@@ -517,16 +518,16 @@ class TestMCPServerCaptureDecision:
         mock_processor_class,
         mock_server_class
     ):
-        """Test de captura de decisión con campos mínimos requeridos."""
+        """Test for decision capture with minimum required fields."""
         from memorytwin.mcp_server.server import MemoryTwinMCPServer
-        
+
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
-        
+
         mock_storage = MagicMock()
         mock_storage.store_episode.return_value = "minimal-decision-id"
         mock_storage_class.return_value = mock_storage
-        
+
         sample_episode = Episode(
             id=uuid4(),
             task="Test task",
@@ -539,28 +540,69 @@ class TestMCPServerCaptureDecision:
             lessons_learned=[],
             project_name="default"
         )
-        
+
         mock_processor = MagicMock()
         mock_processor.process_thought = AsyncMock(return_value=sample_episode)
         mock_processor_class.return_value = mock_processor
-        
+
         mcp_server = MemoryTwinMCPServer()
         mcp_server._lazy_init()
-        
-        # Solo campos requeridos: task, decision, reasoning
+
+        # Only required fields: task, decision, reasoning
         result = await mcp_server._capture_decision({
-            "task": "Elegir formato de config",
+            "task": "Choose config format",
             "decision": "YAML",
-            "reasoning": "Más legible que JSON"
+            "reasoning": "More readable than JSON"
         })
-        
+
         assert result.isError is False
         content = result.content[0].text
         assert "minimal-decision-id" in content
 
+    @patch("memorytwin.mcp_server.server.Server")
+    @patch("memorytwin.mcp_server.server.ThoughtProcessor")
+    @patch("memorytwin.mcp_server.server.MemoryStorage")
+    @patch("memorytwin.mcp_server.server.RAGEngine")
+    @pytest.mark.asyncio
+    async def test_capture_decision_fallback_when_llm_fails(
+        self,
+        mock_rag_class,
+        mock_storage_class,
+        mock_processor_class,
+        mock_server_class
+    ):
+        """Capture decision should still store an episode if LLM processing fails."""
+        from memorytwin.mcp_server.server import MemoryTwinMCPServer
+
+        mock_server = MagicMock()
+        mock_server_class.return_value = mock_server
+
+        mock_storage = MagicMock()
+        mock_storage.store_episode.return_value = "fallback-decision-id"
+        mock_storage_class.return_value = mock_storage
+
+        mock_processor = MagicMock()
+        mock_processor.process_thought = AsyncMock(side_effect=Exception("Model not found"))
+        mock_processor_class.return_value = mock_processor
+
+        mcp_server = MemoryTwinMCPServer()
+        mcp_server._lazy_init()
+
+        result = await mcp_server._capture_decision({
+            "task": "Choose queue system",
+            "decision": "Redis Streams",
+            "reasoning": "Simple operations and low latency",
+            "project_name": "test-project"
+        })
+
+        assert result.isError is False
+        content = result.content[0].text
+        assert "fallback-decision-id" in content
+        mock_storage.store_episode.assert_called_once()
+
 
 class TestMCPServerCaptureQuick:
-    """Tests para capture_quick del servidor MCP."""
+    """Tests for MCP server capture_quick."""
 
     @patch("memorytwin.mcp_server.server.Server")
     @patch("memorytwin.mcp_server.server.ThoughtProcessor")
@@ -574,43 +616,43 @@ class TestMCPServerCaptureQuick:
         mock_processor_class,
         mock_server_class
     ):
-        """Test de captura rápida exitosa."""
+        """Test for successful quick capture."""
         from memorytwin.mcp_server.server import MemoryTwinMCPServer
-        
+
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
-        
+
         mock_storage = MagicMock()
         mock_storage.store_episode.return_value = "quick-episode-id"
         mock_storage_class.return_value = mock_storage
-        
+
         sample_episode = Episode(
             id=uuid4(),
-            task="Añadí retry logic",
+            task="Added retry logic",
             context="",
             reasoning_trace=ReasoningTrace(raw_thinking="test"),
             solution="Retry con exponential backoff",
-            solution_summary="Se añadió retry",
+            solution_summary="Retry was added",
             episode_type=EpisodeType.BUG_FIX,
             tags=["http", "retry"],
-            lessons_learned=["Siempre usar retry en llamadas externas"],
+            lessons_learned=["Always use retry for external calls"],
             project_name="test"
         )
-        
+
         mock_processor = MagicMock()
         mock_processor.process_thought = AsyncMock(return_value=sample_episode)
         mock_processor_class.return_value = mock_processor
-        
+
         mcp_server = MemoryTwinMCPServer()
         mcp_server._lazy_init()
-        
+
         result = await mcp_server._capture_quick({
-            "what": "Añadí retry logic al cliente HTTP",
-            "why": "Las llamadas a la API fallaban intermitentemente",
-            "lesson": "Siempre usar retry en llamadas externas",
+            "what": "Added retry logic to HTTP client",
+            "why": "API calls were failing intermittently",
+            "lesson": "Always use retry for external calls",
             "project_name": "test-project"
         })
-        
+
         assert result.isError is False
         content = result.content[0].text
         assert "quick-episode-id" in content
@@ -628,16 +670,16 @@ class TestMCPServerCaptureQuick:
         mock_processor_class,
         mock_server_class
     ):
-        """Test de captura rápida con campos mínimos."""
+        """Test for quick capture with minimum fields."""
         from memorytwin.mcp_server.server import MemoryTwinMCPServer
-        
+
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
-        
+
         mock_storage = MagicMock()
         mock_storage.store_episode.return_value = "minimal-quick-id"
         mock_storage_class.return_value = mock_storage
-        
+
         sample_episode = Episode(
             id=uuid4(),
             task="Test",
@@ -650,27 +692,67 @@ class TestMCPServerCaptureQuick:
             lessons_learned=[],
             project_name="default"
         )
-        
+
         mock_processor = MagicMock()
         mock_processor.process_thought = AsyncMock(return_value=sample_episode)
         mock_processor_class.return_value = mock_processor
-        
+
         mcp_server = MemoryTwinMCPServer()
         mcp_server._lazy_init()
-        
-        # Solo campos requeridos: what, why
+
+        # Only required fields: what, why
         result = await mcp_server._capture_quick({
-            "what": "Cambié de axios a fetch",
-            "why": "Reducir dependencias"
+            "what": "Switched from axios to fetch",
+            "why": "Reduce dependencies"
         })
-        
+
         assert result.isError is False
         content = result.content[0].text
         assert "minimal-quick-id" in content
 
+    @patch("memorytwin.mcp_server.server.Server")
+    @patch("memorytwin.mcp_server.server.ThoughtProcessor")
+    @patch("memorytwin.mcp_server.server.MemoryStorage")
+    @patch("memorytwin.mcp_server.server.RAGEngine")
+    @pytest.mark.asyncio
+    async def test_capture_quick_fallback_when_llm_fails(
+        self,
+        mock_rag_class,
+        mock_storage_class,
+        mock_processor_class,
+        mock_server_class
+    ):
+        """Quick capture should still store an episode if LLM processing fails."""
+        from memorytwin.mcp_server.server import MemoryTwinMCPServer
+
+        mock_server = MagicMock()
+        mock_server_class.return_value = mock_server
+
+        mock_storage = MagicMock()
+        mock_storage.store_episode.return_value = "fallback-quick-id"
+        mock_storage_class.return_value = mock_storage
+
+        mock_processor = MagicMock()
+        mock_processor.process_thought = AsyncMock(side_effect=Exception("Model not found"))
+        mock_processor_class.return_value = mock_processor
+
+        mcp_server = MemoryTwinMCPServer()
+        mcp_server._lazy_init()
+
+        result = await mcp_server._capture_quick({
+            "what": "Added timeout handling",
+            "why": "Prevent hanging external calls",
+            "project_name": "test-project"
+        })
+
+        assert result.isError is False
+        content = result.content[0].text
+        assert "fallback-quick-id" in content
+        mock_storage.store_episode.assert_called_once()
+
 
 class TestMCPServerQueryMemory:
-    """Tests para query_memory del servidor MCP."""
+    """Tests for MCP server query_memory."""
 
     @patch("memorytwin.mcp_server.server.Server")
     @patch("memorytwin.mcp_server.server.ThoughtProcessor")
@@ -684,15 +766,15 @@ class TestMCPServerQueryMemory:
         mock_processor,
         mock_server_class
     ):
-        """Test de consulta RAG exitosa."""
+        """Test for successful RAG query."""
         from memorytwin.mcp_server.server import MemoryTwinMCPServer
-        
+
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
-        
+
         mock_storage = MagicMock()
         mock_storage_class.return_value = mock_storage
-        
+
         mock_rag = MagicMock()
         mock_rag.query = AsyncMock(return_value={
             "answer": "JWT fue elegido por escalabilidad",
@@ -700,27 +782,27 @@ class TestMCPServerQueryMemory:
             "context_provided": True
         })
         mock_rag_class.return_value = mock_rag
-        
+
         mcp_server = MemoryTwinMCPServer()
         mcp_server._lazy_init()
-        
+
         result = await mcp_server._query_memory({
-            "question": "¿Por qué usamos JWT?",
+            "question": "Why did we use JWT?",
             "project_name": "test",
             "num_episodes": 3
         })
-        
+
         assert result.isError is False
         assert "JWT" in result.content[0].text
         mock_rag.query.assert_called_once_with(
-            question="¿Por qué usamos JWT?",
+            question="Why did we use JWT?",
             project_name="test",
             top_k=3
         )
 
 
 class TestMCPServerProjectContext:
-    """Tests para get_project_context del servidor MCP."""
+    """Tests for MCP server get_project_context."""
 
     @patch("memorytwin.mcp_server.server.Server")
     @patch("memorytwin.mcp_server.server.ThoughtProcessor")
@@ -734,25 +816,25 @@ class TestMCPServerProjectContext:
         mock_processor,
         mock_server_class
     ):
-        """Test de contexto vacío."""
+        """Test for empty context."""
         from memorytwin.mcp_server.server import MemoryTwinMCPServer
-        
+
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
-        
+
         mock_storage = MagicMock()
         mock_storage.get_meta_memory_statistics.return_value = {"total_meta_memories": 0}
         mock_storage_class.return_value = mock_storage
-        
+
         mock_rag = MagicMock()
         mock_rag.get_statistics.return_value = {"total_episodes": 0}
         mock_rag_class.return_value = mock_rag
-        
+
         mcp_server = MemoryTwinMCPServer()
         mcp_server._lazy_init()
-        
+
         result = await mcp_server._get_project_context({})
-        
+
         assert result.isError is False
         content = result.content[0].text
         assert "empty" in content or "no hay" in content.lower()
@@ -769,16 +851,16 @@ class TestMCPServerProjectContext:
         mock_processor,
         mock_server_class
     ):
-        """Test de contexto completo (pocas memorias)."""
+        """Test for full context (few memories)."""
         from memorytwin.mcp_server.server import MemoryTwinMCPServer
-        
+
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
-        
+
         mock_storage = MagicMock()
         mock_storage.get_meta_memory_statistics.return_value = {"total_meta_memories": 0}
         mock_storage_class.return_value = mock_storage
-        
+
         mock_rag = MagicMock()
         mock_rag.get_statistics.return_value = {"total_episodes": 10}
         mock_rag.get_timeline.return_value = [
@@ -786,12 +868,12 @@ class TestMCPServerProjectContext:
         ]
         mock_rag.get_lessons.return_value = []
         mock_rag_class.return_value = mock_rag
-        
+
         mcp_server = MemoryTwinMCPServer()
         mcp_server._lazy_init()
-        
+
         result = await mcp_server._get_project_context({"topic": "test"})
-        
+
         assert result.isError is False
         content = result.content[0].text
         assert "full_context" in content
@@ -808,35 +890,35 @@ class TestMCPServerProjectContext:
         mock_processor,
         mock_server_class
     ):
-        """Test de contexto inteligente (muchas memorias)."""
+        """Test for smart context (many memories)."""
         from memorytwin.mcp_server.server import MemoryTwinMCPServer
-        
+
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
-        
+
         mock_storage = MagicMock()
         mock_storage.search_episodes.return_value = []
         mock_storage.get_meta_memory_statistics.return_value = {"total_meta_memories": 0}
         mock_storage_class.return_value = mock_storage
-        
+
         mock_rag = MagicMock()
         mock_rag.get_statistics.return_value = {"total_episodes": 50}
         mock_rag.get_timeline.return_value = []
         mock_rag.get_lessons.return_value = []
         mock_rag_class.return_value = mock_rag
-        
+
         mcp_server = MemoryTwinMCPServer()
         mcp_server._lazy_init()
-        
+
         result = await mcp_server._get_project_context({"topic": "auth"})
-        
+
         assert result.isError is False
         content = result.content[0].text
         assert "smart_context" in content
 
 
 class TestMCPServerErrorHandling:
-    """Tests para manejo de errores del servidor MCP."""
+    """Tests for MCP server error handling."""
 
     @patch("memorytwin.mcp_server.server.Server")
     @patch("memorytwin.mcp_server.server.ThoughtProcessor")
@@ -850,20 +932,20 @@ class TestMCPServerErrorHandling:
         mock_processor,
         mock_server_class
     ):
-        """Test de manejo de errores en herramientas."""
+        """Test for error handling in tools."""
         from memorytwin.mcp_server.server import MemoryTwinMCPServer
-        
+
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
-        
+
         mock_storage = MagicMock()
         mock_storage.get_statistics.side_effect = Exception("Database error")
         mock_storage_class.return_value = mock_storage
-        
+
         mcp_server = MemoryTwinMCPServer()
         mcp_server._lazy_init()
-        
-        # El método _get_statistics no captura excepciones, así que debe lanzarla
+
+        # The _get_statistics method doesn't catch exceptions, so it should raise
         with pytest.raises(Exception, match="Database error"):
             await mcp_server._get_statistics({})
 
@@ -879,19 +961,19 @@ class TestMCPServerErrorHandling:
         mock_processor,
         mock_server_class
     ):
-        """Test de get_episode sin ID."""
+        """Test for get_episode without ID."""
         from memorytwin.mcp_server.server import MemoryTwinMCPServer
-        
+
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
-        
+
         mock_storage = MagicMock()
         mock_storage_class.return_value = mock_storage
-        
+
         mcp_server = MemoryTwinMCPServer()
         mcp_server._lazy_init()
-        
+
         result = await mcp_server._get_episode({})
-        
+
         assert result.isError is True
         assert "episode_id" in result.content[0].text.lower()

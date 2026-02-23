@@ -1,44 +1,45 @@
 """
-Tests para el módulo Escriba
+Tests for the models module
 ============================
 """
 
-import pytest
 from datetime import datetime
 from uuid import UUID
+
+import pytest
 
 from memorytwin.models import (
     Episode,
     EpisodeType,
+    MemoryQuery,
     ProcessedInput,
     ReasoningTrace,
-    MemoryQuery,
 )
 
 
 class TestModels:
-    """Tests para los modelos Pydantic."""
-    
+    """Tests for Pydantic models."""
+
     def test_reasoning_trace_creation(self):
-        """Test de creación de ReasoningTrace."""
+        """Test for ReasoningTrace creation."""
         rt = ReasoningTrace(
-            raw_thinking="Consideré usar JWT por su naturaleza stateless",
+            raw_thinking="I considered using JWT for its stateless nature",
             alternatives_considered=["Sessions", "OAuth2"],
-            decision_factors=["Escalabilidad", "Simplicidad"],
+            decision_factors=["Scalability", "Simplicity"],
             confidence_level=0.85
         )
-        
-        assert rt.raw_thinking == "Consideré usar JWT por su naturaleza stateless"
+
+        assert rt.raw_thinking == "I considered using JWT for its stateless nature"
         assert len(rt.alternatives_considered) == 2
         assert rt.confidence_level == 0.85
-    
+
     def test_episode_creation(self):
-        """Test de creación de Episode."""
+        """Test for Episode creation."""
         episode = Episode(
-            task="Implementar autenticación",
-            context="API REST en FastAPI",
+            task="Implement authentication",
+            context="REST API in FastAPI",
             reasoning_trace=ReasoningTrace(
-                raw_thinking="Elegí JWT por escalabilidad"
+                raw_thinking="I chose JWT for scalability"
             ),
             solution="from jose import jwt...",
             solution_summary="JWT con tokens de 24h",
@@ -46,47 +47,47 @@ class TestModels:
             tags=["auth", "jwt"],
             project_name="test-project"
         )
-        
+
         assert isinstance(episode.id, UUID)
         assert isinstance(episode.timestamp, datetime)
-        assert episode.task == "Implementar autenticación"
+        assert episode.task == "Implement authentication"
         assert episode.episode_type == EpisodeType.FEATURE
         assert episode.success is True  # Default
-    
+
     def test_episode_types(self):
-        """Test de tipos de episodio."""
+        """Test for episode types."""
         assert EpisodeType.DECISION.value == "decision"
         assert EpisodeType.BUG_FIX.value == "bug_fix"
         assert EpisodeType.REFACTOR.value == "refactor"
         assert EpisodeType.FEATURE.value == "feature"
-    
+
     def test_processed_input(self):
-        """Test de ProcessedInput."""
+        """Test for ProcessedInput."""
         pi = ProcessedInput(
             raw_text="Thinking text here",
-            user_prompt="Implementa autenticación",
+            user_prompt="Implement authentication",
             code_changes="def auth(): pass",
             source="clipboard"
         )
-        
+
         assert pi.raw_text == "Thinking text here"
         assert pi.source == "clipboard"
         assert isinstance(pi.captured_at, datetime)
-    
+
     def test_memory_query(self):
-        """Test de MemoryQuery."""
+        """Test for MemoryQuery."""
         query = MemoryQuery(
-            query="¿Por qué JWT?",
+            query="Why JWT?",
             project_filter="test-project",
             type_filter=EpisodeType.DECISION,
             top_k=3
         )
-        
-        assert query.query == "¿Por qué JWT?"
+
+        assert query.query == "Why JWT?"
         assert query.top_k == 3
-    
+
     def test_episode_json_serialization(self):
-        """Test de serialización JSON del Episode."""
+        """Test for Episode JSON serialization."""
         episode = Episode(
             task="Test task",
             context="Test context",
@@ -94,35 +95,35 @@ class TestModels:
             solution="code",
             solution_summary="summary"
         )
-        
+
         json_str = episode.model_dump_json()
         assert "Test task" in json_str
         assert "Test thinking" in json_str
 
 
 class TestProcessedInput:
-    """Tests específicos para ProcessedInput."""
-    
+    """Specific tests for ProcessedInput."""
+
     def test_minimal_input(self):
-        """Test con input mínimo."""
-        pi = ProcessedInput(raw_text="Solo texto")
-        
-        assert pi.raw_text == "Solo texto"
+        """Test with minimal input."""
+        pi = ProcessedInput(raw_text="Just text")
+
+        assert pi.raw_text == "Just text"
         assert pi.user_prompt is None
         assert pi.code_changes is None
         assert pi.source == "manual"
-    
+
     def test_full_input(self):
-        """Test con input completo."""
+        """Test with complete input."""
         pi = ProcessedInput(
-            raw_text="Razonamiento completo del modelo...",
-            user_prompt="Prompt del usuario",
+            raw_text="Complete model reasoning...",
+            user_prompt="User prompt",
             code_changes="```python\ndef hello(): pass\n```",
             source="mcp"
         )
-        
+
         assert pi.source == "mcp"
-        assert "Razonamiento" in pi.raw_text
+        assert "Complete" in pi.raw_text
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 """
-Tests para MetaMemory y consolidación
+Tests for MetaMemory and consolidation
 =====================================
 """
 
@@ -9,67 +9,66 @@ from uuid import uuid4
 import pytest
 
 from memorytwin.models import (
+    Episode,
     MetaMemory,
     MetaMemorySearchResult,
-    Episode,
-    EpisodeType,
-    ReasoningTrace
+    ReasoningTrace,
 )
 
 
 class TestMetaMemoryModel:
-    """Tests para el modelo MetaMemory."""
-    
+    """Tests for the MetaMemory model."""
+
     def test_create_minimal_meta_memory(self):
-        """Crear MetaMemory con campos mínimos."""
+        """Create MetaMemory with minimal fields."""
         mm = MetaMemory(
-            pattern="Patrón de prueba",
-            pattern_summary="Resumen del patrón"
+            pattern="Test pattern",
+            pattern_summary="Pattern summary"
         )
-        
-        assert mm.pattern == "Patrón de prueba"
-        assert mm.pattern_summary == "Resumen del patrón"
+
+        assert mm.pattern == "Test pattern"
+        assert mm.pattern_summary == "Pattern summary"
         assert mm.id is not None
         assert mm.created_at is not None
         assert mm.confidence == 0.5  # default
         assert mm.episode_count == 0
-    
+
     def test_create_full_meta_memory(self):
-        """Crear MetaMemory con todos los campos."""
+        """Create MetaMemory with all fields."""
         source_ids = [uuid4(), uuid4(), uuid4()]
-        
+
         mm = MetaMemory(
-            pattern="Patrón de manejo de errores en APIs REST",
-            pattern_summary="Usar try-except con logging estructurado",
-            lessons=["Siempre loguear el contexto", "Usar códigos HTTP apropiados"],
-            best_practices=["Centralizar manejo de errores", "Usar middleware"],
-            antipatterns=["Capturar Exception genérica", "Silenciar errores"],
-            exceptions=["Errores de validación son 400, no 500"],
-            edge_cases=["Timeouts en cascada"],
-            contexts=["APIs REST", "Microservicios"],
+            pattern="Error handling pattern in REST APIs",
+            pattern_summary="Use try-except with structured logging",
+            lessons=["Always log the context", "Use appropriate HTTP codes"],
+            best_practices=["Centralize error handling", "Use middleware"],
+            antipatterns=["Catching generic Exception", "Silencing errors"],
+            exceptions=["Validation errors are 400, not 500"],
+            edge_cases=["Cascading timeouts"],
+            contexts=["REST APIs", "Microservices"],
             technologies=["Python", "FastAPI", "SQLAlchemy"],
             source_episode_ids=source_ids,
             episode_count=3,
             confidence=0.85,
             coherence_score=0.9,
             project_name="test-project",
-            tags=["api", "errores", "python"]
+            tags=["api", "errors", "python"]
         )
-        
+
         assert len(mm.lessons) == 2
         assert len(mm.best_practices) == 2
         assert len(mm.antipatterns) == 2
         assert len(mm.source_episode_ids) == 3
         assert mm.confidence == 0.85
         assert "FastAPI" in mm.technologies
-    
+
     def test_meta_memory_defaults(self):
-        """Verificar valores por defecto."""
+        """Verify default values."""
         mm = MetaMemory(
             pattern="Test",
             pattern_summary="Test"
         )
-        
+
         assert mm.lessons == []
         assert mm.best_practices == []
         assert mm.antipatterns == []
@@ -85,50 +84,50 @@ class TestMetaMemoryModel:
         assert mm.tags == []
         assert mm.access_count == 0
         assert mm.last_accessed is None
-    
+
     def test_confidence_bounds(self):
-        """Confidence debe estar entre 0 y 1."""
-        # Valor válido
+        """Confidence should be between 0 and 1."""
+        # Valid value
         mm = MetaMemory(
             pattern="Test",
             pattern_summary="Test",
             confidence=0.95
         )
         assert mm.confidence == 0.95
-        
-        # Valores fuera de rango deben fallar
+
+        # Out-of-range values should fail
         with pytest.raises(ValueError):
             MetaMemory(
                 pattern="Test",
                 pattern_summary="Test",
                 confidence=1.5
             )
-        
+
         with pytest.raises(ValueError):
             MetaMemory(
                 pattern="Test",
                 pattern_summary="Test",
                 confidence=-0.1
             )
-    
+
     def test_coherence_score_bounds(self):
-        """Coherence score debe estar entre 0 y 1."""
+        """Coherence score should be between 0 and 1."""
         mm = MetaMemory(
             pattern="Test",
             pattern_summary="Test",
             coherence_score=0.0
         )
         assert mm.coherence_score == 0.0
-        
+
         mm2 = MetaMemory(
             pattern="Test",
             pattern_summary="Test",
             coherence_score=1.0
         )
         assert mm2.coherence_score == 1.0
-    
+
     def test_access_count_non_negative(self):
-        """Access count no puede ser negativo."""
+        """Access count cannot be negative."""
         with pytest.raises(ValueError):
             MetaMemory(
                 pattern="Test",
@@ -138,35 +137,35 @@ class TestMetaMemoryModel:
 
 
 class TestMetaMemorySearchResult:
-    """Tests para MetaMemorySearchResult."""
-    
+    """Tests for MetaMemorySearchResult."""
+
     def test_create_search_result(self):
-        """Crear resultado de búsqueda de meta-memoria."""
+        """Create meta-memory search result."""
         mm = MetaMemory(
             pattern="Test pattern",
             pattern_summary="Test summary"
         )
-        
+
         result = MetaMemorySearchResult(
             meta_memory=mm,
             relevance_score=0.85,
-            match_reason="Patrón consolidado de 5 episodios"
+            match_reason="Consolidated pattern from 5 episodes"
         )
-        
+
         assert result.meta_memory == mm
         assert result.relevance_score == 0.85
-        assert "5 episodios" in result.match_reason
-    
+        assert "5 episodes" in result.match_reason
+
     def test_relevance_score_bounds(self):
-        """Relevance score debe estar entre 0 y 1."""
+        """Relevance score should be between 0 and 1."""
         mm = MetaMemory(pattern="Test", pattern_summary="Test")
-        
+
         with pytest.raises(ValueError):
             MetaMemorySearchResult(
                 meta_memory=mm,
                 relevance_score=1.5
             )
-        
+
         with pytest.raises(ValueError):
             MetaMemorySearchResult(
                 meta_memory=mm,
@@ -175,55 +174,55 @@ class TestMetaMemorySearchResult:
 
 
 class TestConsolidationHelpers:
-    """Tests para funciones auxiliares de consolidación."""
-    
+    """Tests for consolidation helper functions."""
+
     def test_format_episode_for_consolidation(self):
-        """Verificar formateo de episodio para consolidación."""
+        """Verify episode formatting for consolidation."""
         from memorytwin.consolidation import format_episode_for_consolidation
-        
+
         episode = Episode(
             id=uuid4(),
             timestamp=datetime(2024, 1, 15, 10, 30, tzinfo=timezone.utc),
-            task="Implementar autenticación JWT",
-            context="API REST con FastAPI",
+            task="Implement JWT authentication",
+            context="REST API with FastAPI",
             reasoning_trace=ReasoningTrace(
-                raw_thinking="Consideré OAuth2 pero JWT es más simple para este caso..."
+                raw_thinking="I considered OAuth2 but JWT is simpler for this case..."
             ),
-            solution="Implementar con pyjwt",
-            solution_summary="Usar pyjwt para generar tokens",
-            lessons_learned=["Rotar claves regularmente", "Usar tiempos cortos de expiración"],
+            solution="Implement with pyjwt",
+            solution_summary="Use pyjwt to generate tokens",
+            lessons_learned=["Rotate keys regularly", "Use short expiration times"],
             tags=["auth", "jwt", "security"]
         )
-        
+
         formatted = format_episode_for_consolidation(episode)
-        
-        # El formato compacto incluye fecha, tarea, solución y lecciones
-        assert "Implementar autenticación JWT" in formatted
+
+        # The compact format includes date, task, solution and lessons
+        assert "Implement JWT authentication" in formatted
         assert "2024-01-15" in formatted
-        assert "pyjwt" in formatted  # De la solución
-        assert "Rotar claves regularmente" in formatted  # De las lecciones
+        assert "pyjwt" in formatted  # From the solution
+        assert "Rotate keys regularly" in formatted  # From the lessons
 
 
 class TestMetaMemoryTimestamps:
-    """Tests para manejo de timestamps en MetaMemory."""
-    
+    """Tests for MetaMemory timestamp handling."""
+
     def test_created_at_auto_generated(self):
-        """created_at se genera automáticamente."""
+        """created_at is auto-generated."""
         before = datetime.now(timezone.utc)
         mm = MetaMemory(pattern="Test", pattern_summary="Test")
         after = datetime.now(timezone.utc)
-        
+
         assert before <= mm.created_at <= after
-    
+
     def test_updated_at_auto_generated(self):
-        """updated_at se genera automáticamente."""
+        """updated_at is auto-generated."""
         mm = MetaMemory(pattern="Test", pattern_summary="Test")
-        
+
         assert mm.updated_at is not None
-        assert mm.created_at == mm.updated_at  # Inicialmente iguales
-    
+        assert mm.created_at == mm.updated_at  # Initially equal
+
     def test_last_accessed_initially_none(self):
-        """last_accessed es None inicialmente."""
+        """last_accessed is initially None."""
         mm = MetaMemory(pattern="Test", pattern_summary="Test")
-        
+
         assert mm.last_accessed is None

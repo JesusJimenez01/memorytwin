@@ -1,16 +1,16 @@
 """
-Observabilidad con Langfuse v3 - Versión Simplificada
-=====================================================
+Observability with Langfuse v3 - Simplified Version
+====================================================
 
-Solo 3 trazas principales:
-1. 📥 Almacenar Recuerdo - Input/Output del LLM al estructurar pensamiento
-2. 🔍 Acceder Recuerdos - Input/Output del LLM en consultas RAG  
-3. 🔄 Consolidar Memorias - Episodios consolidados → MetaMemoria creada
+Only 3 main traces:
+1. Store Memory - LLM Input/Output when structuring thoughts
+2. Access Memories - LLM Input/Output for RAG queries
+3. Consolidate Memories - Consolidated episodes -> MetaMemory created
 
-Configuración via .env:
+Configuration via .env:
   - LANGFUSE_PUBLIC_KEY
   - LANGFUSE_SECRET_KEY
-  - LANGFUSE_HOST (opcional)
+  - LANGFUSE_HOST (optional)
 """
 
 import logging
@@ -18,11 +18,11 @@ import os
 import sys
 from functools import wraps
 
-# Silenciar warnings molestos de Langfuse ("Calling end() on an ended span")
+# Silence noisy Langfuse warnings ("Calling end() on an ended span")
 logging.getLogger("langfuse").setLevel(logging.ERROR)
 
-# Importar config primero para cargar .env
-from memorytwin.config import get_settings  # noqa: F401 - asegura que .env esté cargado
+# Import config first to load .env
+from memorytwin.config import get_settings  # noqa: F401 - ensures .env is loaded
 
 try:
     from langfuse import Langfuse  # type: ignore
@@ -31,12 +31,12 @@ except ImportError:
 
 __all__ = ["trace_store_memory", "trace_access_memory", "trace_consolidation", "flush_traces"]
 
-# Cliente Langfuse singleton
+# Singleton Langfuse client
 _langfuse_client = None
 
 
 def _is_disabled() -> bool:
-    """Verificar si Langfuse está deshabilitado (tests o credenciales vacías)."""
+    """Check if Langfuse is disabled (tests or missing credentials)."""
     if Langfuse is None:
         return True
     if "pytest" in sys.modules:
@@ -49,7 +49,7 @@ def _is_disabled() -> bool:
 
 
 def _get_langfuse():
-    """Obtener cliente Langfuse singleton."""
+    """Get the singleton Langfuse client."""
     global _langfuse_client
     if _langfuse_client is None and not _is_disabled():
         try:
@@ -60,7 +60,7 @@ def _get_langfuse():
 
 
 def flush_traces():
-    """Forzar envío de trazas pendientes."""
+    """Force sending pending traces."""
     client = _get_langfuse()
     if client:
         try:
@@ -71,26 +71,26 @@ def flush_traces():
 
 def trace_store_memory(func):
     """
-    Decorador para trazar almacenamiento de recuerdos.
-    Captura: input al LLM (thinking text) → output del LLM (episodio estructurado)
+    Decorator for tracing memory storage.
+    Captures: LLM input (thinking text) -> LLM output (structured episode)
     """
     @wraps(func)
     async def wrapper(*args, **kwargs):
         if _is_disabled():
             return await func(*args, **kwargs)
-        
-        # Extraer input (raw_input está en args[1] o kwargs)
+
+        # Extract input (raw_input is in args[1] or kwargs)
         raw_input = kwargs.get('raw_input') or (args[1] if len(args) > 1 else None)
         project_name = kwargs.get('project_name', 'default')
         input_text = raw_input.raw_text[:500] if raw_input else "N/A"
-        
+
         client = _get_langfuse()
         if not client:
             return await func(*args, **kwargs)
-        
+
         try:
             with client.start_as_current_span(
-                name="📥 Almacenar Recuerdo",
+                name="Store Memory",
                 input={"thinking_text": input_text, "project": project_name},
                 metadata={"project": project_name, "operation": "store"}
             ) as span:
@@ -104,9 +104,9 @@ def trace_store_memory(func):
                 })
                 return result
         except Exception as e:
-            # En caso de error, igual crear span para registrarlo
+            # On error, still create a span to log it
             with client.start_as_current_span(
-                name="📥 Almacenar Recuerdo - ERROR",
+                name="Store Memory - ERROR",
                 input={"thinking_text": input_text},
                 level="ERROR"
             ) as span:
@@ -114,31 +114,31 @@ def trace_store_memory(func):
             raise
         finally:
             client.flush()
-    
+
     return wrapper
 
 
 def trace_access_memory(func):
     """
-    Decorador para trazar acceso a recuerdos (RAG).
-    Captura: pregunta del usuario → respuesta generada con contexto
+    Decorator for tracing memory access (RAG).
+    Captures: user question -> generated response with context
     """
     @wraps(func)
     async def wrapper(*args, **kwargs):
         if _is_disabled():
             return await func(*args, **kwargs)
-        
-        # Extraer input (question está en args[1] o kwargs)
+
+        # Extract input (question is in args[1] or kwargs)
         question = kwargs.get('question') or (args[1] if len(args) > 1 else "N/A")
         project_name = kwargs.get('project_name', 'all')
-        
+
         client = _get_langfuse()
         if not client:
             return await func(*args, **kwargs)
-        
+
         try:
             with client.start_as_current_span(
-                name="🔍 Acceder Recuerdos",
+                name="Access Memories",
                 input={"question": question, "project": project_name},
                 metadata={"project": project_name or "all", "operation": "access"}
             ) as span:
@@ -152,7 +152,7 @@ def trace_access_memory(func):
                 return result
         except Exception as e:
             with client.start_as_current_span(
-                name="🔍 Acceder Recuerdos - ERROR",
+                name="Access Memories - ERROR",
                 input={"question": question},
                 level="ERROR"
             ) as span:
@@ -160,36 +160,36 @@ def trace_access_memory(func):
             raise
         finally:
             client.flush()
-    
+
     return wrapper
 
 
 def trace_consolidation(func):
     """
-    Decorador para trazar consolidación de memorias.
-    Captura: episodios a consolidar → meta-memoria creada
+    Decorator for tracing memory consolidation.
+    Captures: episodes to consolidate -> created meta-memory
     """
     @wraps(func)
     def wrapper(*args, **kwargs):
         if _is_disabled():
             return func(*args, **kwargs)
-        
-        # Extraer episodios (están en args[1] para métodos de clase)
+
+        # Extract episodes (in args[1] for class methods)
         episodes = kwargs.get('episodes') or (args[1] if len(args) > 1 else [])
         project_name = kwargs.get('project_name') or (args[2] if len(args) > 2 else 'unknown')
-        
+
         episode_summaries = [
             {"id": str(ep.id), "task": ep.task[:100], "type": ep.episode_type.value}
             for ep in episodes[:10]
         ]
-        
+
         client = _get_langfuse()
         if not client:
             return func(*args, **kwargs)
-        
+
         try:
             with client.start_as_current_span(
-                name="🔄 Consolidar Memorias",
+                name="Consolidate Memories",
                 input={
                     "episodes_count": len(episodes),
                     "episodes": episode_summaries,
@@ -210,7 +210,7 @@ def trace_consolidation(func):
                 return result
         except Exception as e:
             with client.start_as_current_span(
-                name="🔄 Consolidar Memorias - ERROR",
+                name="Consolidate Memories - ERROR",
                 input={"episodes_count": len(episodes)},
                 level="ERROR"
             ) as span:
@@ -218,5 +218,5 @@ def trace_consolidation(func):
             raise
         finally:
             client.flush()
-    
+
     return wrapper

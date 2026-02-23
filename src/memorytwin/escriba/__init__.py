@@ -1,13 +1,13 @@
 """
-Agente Escriba - Backend de Ingesta de Memoria
-==============================================
+Escriba Agent - Memory Ingestion Backend
+=========================================
 
-Observador pasivo y documentador activo que captura,
-procesa y almacena el razonamiento de los asistentes de IA.
+Passive observer and active documenter that captures,
+processes, and stores AI assistant reasoning.
 """
 
+from memorytwin.escriba.escriba import Escriba
 from memorytwin.escriba.processor import ThoughtProcessor
 from memorytwin.escriba.storage import MemoryStorage
-from memorytwin.escriba.escriba import Escriba
 
 __all__ = ["ThoughtProcessor", "MemoryStorage", "Escriba"]

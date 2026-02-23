@@ -1,10 +1,10 @@
 """
-Almacenamiento de Memoria - ChromaDB + SQLite
-=============================================
+Memory Storage - ChromaDB + SQLite
+===================================
 
-Gestiona el almacenamiento dual:
-- ChromaDB para búsqueda vectorial (embeddings)
-- SQLite para metadatos y consultas estructuradas
+Manages dual storage:
+- ChromaDB for vector search (embeddings)
+- SQLite for metadata and structured queries
 """
 
 import json
@@ -17,60 +17,67 @@ import chromadb
 from chromadb.config import Settings as ChromaSettings
 from sentence_transformers import SentenceTransformer
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
-    String,
-    Text,
-    Boolean,
     Float,
     Integer,
+    String,
+    Text,
     create_engine,
 )
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 from memorytwin.config import get_chroma_dir, get_settings, get_sqlite_path
-from memorytwin.models import Episode, EpisodeType, MemoryQuery, MemorySearchResult, ReasoningTrace, MetaMemory, MetaMemorySearchResult
+from memorytwin.models import (
+    Episode,
+    EpisodeType,
+    MemoryQuery,
+    MemorySearchResult,
+    MetaMemory,
+    MetaMemorySearchResult,
+    ReasoningTrace,
+)
 from memorytwin.scoring import compute_hybrid_score
-
 
 Base = declarative_base()
 
 
 class EpisodeRecord(Base):
-    """Modelo SQLAlchemy para episodios de memoria."""
-    
+    """SQLAlchemy model for memory episodes."""
+
     __tablename__ = "episodes"
-    
+
     id = Column(String(36), primary_key=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
-    
+
     task = Column(Text, nullable=False)
     context = Column(Text, nullable=False)
     reasoning_trace_json = Column(Text, nullable=False)
-    
+
     solution = Column(Text)
     solution_summary = Column(Text)
-    
+
     outcome = Column(Text)
     success = Column(Boolean, default=True)
-    
+
     episode_type = Column(String(50), index=True)
     tags_json = Column(Text)  # JSON array
     files_affected_json = Column(Text)  # JSON array
     lessons_learned_json = Column(Text)  # JSON array
-    
+
     source_assistant = Column(String(100), index=True)
     project_name = Column(String(200), index=True)
-    
-    # Embedding ID en ChromaDB
+
+    # ChromaDB embedding ID
     chroma_id = Column(String(100))
-    
-    # Campos para Forgetting Curve
+
+    # Forgetting Curve fields
     importance_score = Column(Float, default=1.0)
     access_count = Column(Integer, default=0)
     last_accessed = Column(DateTime, nullable=True)
-    
-    # Campos para memoria activa y útil
+
+    # Active and useful memory fields
     is_antipattern = Column(Boolean, default=False, index=True)
     is_critical = Column(Boolean, default=False, index=True)
     superseded_by = Column(String(36), nullable=True)
@@ -78,60 +85,60 @@ class EpisodeRecord(Base):
 
 
 class MetaMemoryRecord(Base):
-    """Modelo SQLAlchemy para meta-memorias consolidadas."""
-    
+    """SQLAlchemy model for consolidated meta-memories."""
+
     __tablename__ = "meta_memories"
-    
+
     id = Column(String(36), primary_key=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    
-    # Patrón identificado
+
+    # Identified pattern
     pattern = Column(Text, nullable=False)
     pattern_summary = Column(Text, nullable=False)
-    
-    # Conocimiento consolidado (JSON arrays)
+
+    # Consolidated knowledge (JSON arrays)
     lessons_json = Column(Text, default="[]")
     best_practices_json = Column(Text, default="[]")
     antipatterns_json = Column(Text, default="[]")
-    
-    # Excepciones y matices
+
+    # Exceptions and nuances
     exceptions_json = Column(Text, default="[]")
     edge_cases_json = Column(Text, default="[]")
-    
-    # Contextos aplicables
+
+    # Applicable contexts
     contexts_json = Column(Text, default="[]")
     technologies_json = Column(Text, default="[]")
-    
-    # Trazabilidad
+
+    # Traceability
     source_episode_ids_json = Column(Text, default="[]")  # JSON array of UUIDs
     episode_count = Column(Integer, default=0)
-    
-    # Calidad y confianza
+
+    # Quality and confidence
     confidence = Column(Float, default=0.5)
     coherence_score = Column(Float, default=0.5)
-    
-    # Metadatos
+
+    # Metadata
     project_name = Column(String(200), index=True)
     tags_json = Column(Text, default="[]")
-    
-    # Uso y relevancia
+
+    # Usage and relevance
     access_count = Column(Integer, default=0)
     last_accessed = Column(DateTime, nullable=True)
-    
-    # Embedding ID en ChromaDB
+
+    # ChromaDB embedding ID
     chroma_id = Column(String(100))
 
 
 class MemoryStorage:
     """
-    Almacenamiento dual de memorias episódicas.
-    Combina ChromaDB (vectores) y SQLite (metadatos).
+    Dual storage for episodic memories.
+    Combines ChromaDB (vectors) and SQLite (metadata).
     """
-    
-    _embedder = None  # Singleton para lazy loading del modelo
+
+    _embedder = None  # Singleton for lazy model loading
     _embedding_model_name = None
-    
+
     def __init__(
         self,
         chroma_path: Optional[Path] = None,
@@ -139,109 +146,109 @@ class MemoryStorage:
         embedding_model: Optional[str] = None
     ):
         """
-        Inicializar almacenamiento.
-        
+        Initialize storage.
+
         Args:
-            chroma_path: Directorio de persistencia de ChromaDB
-            sqlite_path: Path al archivo SQLite
-            embedding_model: Nombre del modelo de embeddings
+            chroma_path: ChromaDB persistence directory
+            sqlite_path: Path to the SQLite file
+            embedding_model: Embedding model name
         """
         settings = get_settings()
-        
-        # Configurar paths
+
+        # Configure paths
         self.chroma_path = chroma_path or get_chroma_dir()
         self.sqlite_path = sqlite_path or get_sqlite_path()
-        
-        # Guardar nombre del modelo para lazy loading
+
+        # Store model name for lazy loading
         MemoryStorage._embedding_model_name = embedding_model or settings.embedding_model
-        
-        # Inicializar ChromaDB
+
+        # Initialize ChromaDB
         self._init_chroma()
-        
-        # Inicializar SQLite
+
+        # Initialize SQLite
         self._init_sqlite()
-    
+
     @property
     def embedder(self):
-        """Lazy loading del modelo de embeddings (se carga solo cuando se necesita)."""
+        """Lazy loading of the embedding model (loaded only when needed)."""
         if MemoryStorage._embedder is None:
             MemoryStorage._embedder = SentenceTransformer(
-                MemoryStorage._embedding_model_name, 
+                MemoryStorage._embedding_model_name,
                 device="cpu"
             )
         return MemoryStorage._embedder
 
     def _init_chroma(self):
-        """Inicializar cliente y colecciones de ChromaDB."""
+        """Initialize ChromaDB client and collections."""
         self.chroma_client = chromadb.PersistentClient(
             path=str(self.chroma_path),
             settings=ChromaSettings(anonymized_telemetry=False)
         )
-        
-        # Colección principal de memorias episódicas
+
+        # Main collection for episodic memories
         self.collection = self.chroma_client.get_or_create_collection(
             name="memory_episodes",
-            metadata={"description": "Episodios de memoria del Memory Twin"}
+            metadata={"description": "Memory Twin episodic memory episodes"}
         )
-        
-        # Colección de meta-memorias consolidadas
+
+        # Collection for consolidated meta-memories
         self.meta_collection = self.chroma_client.get_or_create_collection(
             name="meta_memories",
-            metadata={"description": "Meta-memorias consolidadas del Memory Twin"}
+            metadata={"description": "Memory Twin consolidated meta-memories"}
         )
-        
+
     def _init_sqlite(self):
-        """Inicializar base de datos SQLite."""
+        """Initialize SQLite database."""
         engine = create_engine(f"sqlite:///{self.sqlite_path}")
         Base.metadata.create_all(engine)
         self.SessionLocal = sessionmaker(bind=engine)
-        
+
     def _get_session(self) -> Session:
-        """Obtener sesión de base de datos."""
+        """Get a database session."""
         return self.SessionLocal()
-    
+
     def _generate_embedding(self, episode: Episode) -> list[float]:
         """
-        Generar embedding combinando tarea, contexto y razonamiento.
+        Generate embedding combining task, context, and reasoning.
         """
-        # Texto a embeber: combinación de elementos clave
+        # Text to embed: combination of key elements
         text_parts = [
-            f"Tarea: {episode.task}",
-            f"Contexto: {episode.context}",
-            f"Razonamiento: {episode.reasoning_trace.raw_thinking}",
-            f"Solución: {episode.solution_summary}",
+            f"Task: {episode.task}",
+            f"Context: {episode.context}",
+            f"Reasoning: {episode.reasoning_trace.raw_thinking}",
+            f"Solution: {episode.solution_summary}",
         ]
-        
+
         if episode.lessons_learned:
-            text_parts.append(f"Lecciones: {' '.join(episode.lessons_learned)}")
-            
+            text_parts.append(f"Lessons: {' '.join(episode.lessons_learned)}")
+
         combined_text = "\n".join(text_parts)
-        
-        # Generar embedding
+
+        # Generate embedding
         embedding = self.embedder.encode(combined_text).tolist()
         return embedding
 
     def store_episode(self, episode: Episode) -> str:
         """
-        Almacenar un episodio en ambas bases de datos.
-        
+        Store an episode in both databases.
+
         Args:
-            episode: Episodio a almacenar
-            
+            episode: Episode to store
+
         Returns:
-            ID del episodio almacenado
+            ID of the stored episode
         """
         episode_id = str(episode.id)
-        
-        # Generar embedding
+
+        # Generate embedding
         embedding = self._generate_embedding(episode)
-        
-        # Almacenar en ChromaDB
+
+        # Store in ChromaDB
         self.collection.add(
             ids=[episode_id],
             embeddings=[embedding],
             metadatas=[{
-                "task": episode.task[:500],  # Limitar para metadatos
+                "task": episode.task[:500],  # Limit for metadata
                 "episode_type": episode.episode_type.value,
                 "project_name": episode.project_name,
                 "source_assistant": episode.source_assistant,
@@ -250,8 +257,8 @@ class MemoryStorage:
             }],
             documents=[episode.reasoning_trace.raw_thinking]
         )
-        
-        # Almacenar en SQLite
+
+        # Store in SQLite
         with self._get_session() as session:
             record = EpisodeRecord(
                 id=episode_id,
@@ -270,14 +277,14 @@ class MemoryStorage:
                 source_assistant=episode.source_assistant,
                 project_name=episode.project_name,
                 chroma_id=episode_id,
-                # Campos para Forgetting Curve
+                # Forgetting Curve fields
                 importance_score=episode.importance_score,
                 access_count=episode.access_count,
                 last_accessed=episode.last_accessed
             )
             session.add(record)
             session.commit()
-            
+
         return episode_id
 
     def search_episodes(
@@ -286,174 +293,174 @@ class MemoryStorage:
         use_hybrid_scoring: bool = True
     ) -> list[MemorySearchResult]:
         """
-        Buscar episodios relevantes usando búsqueda vectorial.
-        
-        Implementa scoring híbrido que combina:
-        - Similitud semántica (embeddings)
-        - Decaimiento temporal (forgetting curve)
-        - Boost por uso frecuente
-        - Importancia base del episodio
-        
+        Search for relevant episodes using vector search.
+
+        Implements hybrid scoring that combines:
+        - Semantic similarity (embeddings)
+        - Temporal decay (forgetting curve)
+        - Boost from frequent access
+        - Base importance of the episode
+
         Args:
-            query: Consulta de búsqueda
-            use_hybrid_scoring: Si True, aplica scoring híbrido (default: True)
-            
+            query: Search query
+            use_hybrid_scoring: If True, applies hybrid scoring (default: True)
+
         Returns:
-            Lista de resultados ordenados por relevancia híbrida
+            List of results ordered by hybrid relevance
         """
-        from datetime import datetime, timezone
-        
-        # Generar embedding de la consulta
+
+        # Generate query embedding
         query_embedding = self.embedder.encode(query.query).tolist()
-        
-        # Construir filtros para ChromaDB
+
+        # Build ChromaDB filters
         where_filters = {}
         if query.project_filter:
             where_filters["project_name"] = query.project_filter
         if query.type_filter:
             where_filters["episode_type"] = query.type_filter.value
-        
-        # Pedir más resultados si usamos hybrid scoring (para re-rankear)
+
+        # Request more results if using hybrid scoring (for re-ranking)
         n_results = query.top_k * 3 if use_hybrid_scoring else query.top_k
-        
-        # Búsqueda vectorial
+
+        # Vector search
         results = self.collection.query(
             query_embeddings=[query_embedding],
             n_results=n_results,
             where=where_filters if where_filters else None,
             include=["metadatas", "distances", "documents"]
         )
-        
-        # Convertir resultados
+
+        # Convert results
         search_results = []
-        now = datetime.now(timezone.utc)
-        
+
         if results["ids"] and results["ids"][0]:
             for i, episode_id in enumerate(results["ids"][0]):
-                # Recuperar episodio completo de SQLite
+                # Retrieve full episode from SQLite
                 episode = self.get_episode_by_id(episode_id)
                 if episode:
-                    # Calcular score semántico base (ChromaDB usa distancia L2)
+                    # Calculate base semantic score (ChromaDB uses L2 distance)
                     distance = results["distances"][0][i] if results["distances"] else 0
-                    semantic_score = max(0, 1 - distance / 2)  # Normalizar
-                    
-                    # Aplicar scoring híbrido si está habilitado
+                    semantic_score = max(0, 1 - distance / 2)  # Normalize
+
+                    # Apply hybrid scoring if enabled
                     if use_hybrid_scoring:
                         final_score = compute_hybrid_score(
                             episode=episode,
                             semantic_score=semantic_score,
-                            now=now
                         )
                     else:
                         final_score = semantic_score
-                    
+
+                    match_reason = (
+                        "Semantic match with hybrid scoring" if use_hybrid_scoring
+                        else "Semantic match"
+                    )
                     search_results.append(MemorySearchResult(
                         episode=episode,
-                        relevance_score=min(1.0, final_score),  # Normalizar a max 1.0
-                        match_reason=f"Coincidencia semántica con scoring híbrido" if use_hybrid_scoring else "Coincidencia semántica"
+                        relevance_score=min(1.0, final_score),  # Normalize to max 1.0
+                        match_reason=match_reason,
                     ))
-        
-        # Ordenar por score híbrido (descendente) y limitar resultados
+
+        # Sort by hybrid score (descending) and limit results
         search_results.sort(key=lambda x: x.relevance_score, reverse=True)
         final_results = search_results[:query.top_k]
-        
-        # Actualizar estadísticas de acceso para los episodios devueltos
+
+        # Update access statistics for returned episodes
         for result in final_results:
             self.update_episode_access(str(result.episode.id))
-        
+
         return final_results
-    
+
     def update_episode_access(self, episode_id: str) -> tuple[bool, bool]:
         """
-        Actualizar estadísticas de acceso de un episodio.
-        
-        Incrementa access_count y actualiza last_accessed.
-        También verifica si se debe disparar consolidación automática.
-        
+        Update access statistics of an episode.
+
+        Increments access_count and updates last_accessed.
+        Also checks if automatic consolidation should be triggered.
+
         Args:
-            episode_id: ID del episodio a actualizar
-            
+            episode_id: ID of the episode to update
+
         Returns:
-            Tupla (actualizado, necesita_consolidacion):
-            - actualizado: True si se actualizó correctamente
-            - necesita_consolidacion: True si se recomienda consolidar
+            Tuple (updated, needs_consolidation):
+            - updated: True if successfully updated
+            - needs_consolidation: True if consolidation is recommended
         """
-        from datetime import datetime, timezone
-        from memorytwin.scoring import should_trigger_consolidation, CONSOLIDATION_ACCESS_THRESHOLD
-        
+        from memorytwin.scoring import CONSOLIDATION_ACCESS_THRESHOLD
+
         with self._get_session() as session:
             record = session.query(EpisodeRecord).filter(
                 EpisodeRecord.id == episode_id
             ).first()
-            
+
             if not record:
                 return False, False
-            
-            # Incrementar contador de accesos
+
+            # Increment access counter
             new_access_count = (record.access_count or 0) + 1
             record.access_count = new_access_count
             record.last_accessed = datetime.now(timezone.utc)
-            
+
             session.commit()
-            
-            # Verificar si este episodio indica necesidad de consolidación
+
+            # Check if this episode indicates a need for consolidation
             needs_consolidation = new_access_count >= CONSOLIDATION_ACCESS_THRESHOLD
-            
+
             return True, needs_consolidation
-    
+
     def check_consolidation_needed(self, project_name: Optional[str] = None) -> dict:
         """
-        Verificar si se recomienda ejecutar consolidación automática.
-        
-        Analiza:
-        1. Episodios con alto access_count (patrones "calientes")
-        2. Total de episodios sin consolidar
-        
+        Check if automatic consolidation is recommended.
+
+        Analyzes:
+        1. Episodes with high access_count ("hot" patterns)
+        2. Total unconsolidated episodes
+
         Args:
-            project_name: Filtrar por proyecto (opcional)
-            
+            project_name: Filter by project (optional)
+
         Returns:
-            Dict con recomendación y estadísticas
+            Dict with recommendation and statistics
         """
         from memorytwin.scoring import (
-            CONSOLIDATION_ACCESS_THRESHOLD, 
+            CONSOLIDATION_ACCESS_THRESHOLD,
             CONSOLIDATION_EPISODE_THRESHOLD,
-            should_trigger_consolidation
+            should_trigger_consolidation,
         )
-        
+
         with self._get_session() as session:
             query = session.query(EpisodeRecord)
-            
+
             if project_name:
                 query = query.filter(EpisodeRecord.project_name == project_name)
-            
-            # Contar episodios totales
+
+            # Count total episodes
             total_episodes = query.count()
-            
-            # Encontrar episodios "calientes" (alto access_count)
+
+            # Find "hot" episodes (high access_count)
             hot_episodes = query.filter(
                 EpisodeRecord.access_count >= CONSOLIDATION_ACCESS_THRESHOLD
             ).all()
-            
-            # Contar meta-memorias existentes
+
+            # Count existing meta-memories
             meta_query = session.query(MetaMemoryRecord)
             if project_name:
                 meta_query = meta_query.filter(MetaMemoryRecord.project_name == project_name)
             total_meta_memories = meta_query.count()
-            
-            # Estimar episodios consolidados
+
+            # Estimate consolidated episodes
             total_consolidated = 0
             if total_meta_memories > 0:
                 metas = meta_query.all()
                 for meta in metas:
                     total_consolidated += meta.episode_count
-            
+
             unconsolidated = max(0, total_episodes - total_consolidated)
-            
-            # Determinar si se debe consolidar
+
+            # Determine whether to consolidate
             max_access = max([ep.access_count for ep in hot_episodes], default=0) if hot_episodes else 0
             should_consolidate = should_trigger_consolidation(max_access, unconsolidated)
-            
+
             return {
                 "should_consolidate": should_consolidate,
                 "total_episodes": total_episodes,
@@ -467,51 +474,54 @@ class MemoryStorage:
                 },
                 "hot_episode_ids": [ep.id for ep in hot_episodes[:5]]  # Top 5
             }
-    
+
     def get_episode_by_id(self, episode_id: str) -> Optional[Episode]:
-        """Recuperar un episodio por su ID."""
+        """Retrieve an episode by its ID."""
         with self._get_session() as session:
             record = session.query(EpisodeRecord).filter(
                 EpisodeRecord.id == episode_id
             ).first()
-            
+
             if not record:
                 return None
-                
+
             return self._record_to_episode(record)
-    
+
     def update_episode_flags(
-        self, 
-        episode_id: str, 
+        self,
+        episode_id: str,
         updates: dict
     ) -> bool:
         """
-        Actualizar flags de un episodio (is_antipattern, is_critical, etc).
-        
+        Update an episode's flags (is_antipattern, is_critical, etc).
+
         Args:
-            episode_id: UUID del episodio
-            updates: Dict con campos a actualizar
-            
+            episode_id: Episode UUID
+            updates: Dict with fields to update
+
         Returns:
-            True si se actualizó correctamente
+            True if successfully updated
         """
         with self._get_session() as session:
             record = session.query(EpisodeRecord).filter(
                 EpisodeRecord.id == episode_id
             ).first()
-            
+
             if not record:
                 return False
-            
-            # Actualizar campos permitidos
-            allowed_fields = {'is_antipattern', 'is_critical', 'superseded_by', 'deprecation_reason', 'importance_score'}
+
+            # Update allowed fields
+            allowed_fields = {
+                'is_antipattern', 'is_critical', 'superseded_by',
+                'deprecation_reason', 'importance_score',
+            }
             for field, value in updates.items():
                 if field in allowed_fields and hasattr(record, field):
                     setattr(record, field, value)
-            
+
             session.commit()
-            
-            # También actualizar metadatos en ChromaDB si es antipattern
+
+            # Also update ChromaDB metadata if antipattern
             if updates.get('is_antipattern') or updates.get('is_critical'):
                 try:
                     self.collection.update(
@@ -522,28 +532,28 @@ class MemoryStorage:
                         }]
                     )
                 except Exception:
-                    pass  # No es crítico si falla ChromaDB
-            
+                    pass  # Not critical if ChromaDB fails
+
             return True
 
     def delete_episode(self, episode_id: str) -> bool:
         """
-        Eliminar un episodio de ambas bases de datos.
-        
+        Delete an episode from both databases.
+
         Args:
-            episode_id: ID del episodio a eliminar
-            
+            episode_id: ID of the episode to delete
+
         Returns:
-            True si se eliminó correctamente, False si no existía
+            True if successfully deleted, False if it didn't exist
         """
         try:
-            # Eliminar de ChromaDB
+            # Delete from ChromaDB
             try:
                 self.collection.delete(ids=[episode_id])
             except Exception:
-                pass # Puede no existir en ChromaDB
-            
-            # Eliminar de SQLite
+                pass  # May not exist in ChromaDB
+
+            # Delete from SQLite
             with self._get_session() as session:
                 record = session.query(EpisodeRecord).filter(EpisodeRecord.id == episode_id).first()
                 if record:
@@ -552,7 +562,7 @@ class MemoryStorage:
                     return True
                 return False
         except Exception as e:
-            print(f"Error al eliminar episodio {episode_id}: {e}")
+            print(f"Error deleting episode {episode_id}: {e}")
             return False
 
     def get_episodes_by_project(
@@ -560,14 +570,14 @@ class MemoryStorage:
         project_name: str,
         limit: int = 50
     ) -> list[Episode]:
-        """Obtener episodios de un proyecto específico."""
+        """Get episodes from a specific project."""
         with self._get_session() as session:
             records = session.query(EpisodeRecord).filter(
                 EpisodeRecord.project_name == project_name
             ).order_by(EpisodeRecord.timestamp.desc()).limit(limit).all()
-            
+
             return [self._record_to_episode(r) for r in records]
-    
+
     def get_timeline(
         self,
         project_name: Optional[str] = None,
@@ -576,51 +586,51 @@ class MemoryStorage:
         limit: int = 100
     ) -> list[Episode]:
         """
-        Obtener timeline de episodios para visualización.
+        Get episode timeline for visualization.
         """
         with self._get_session() as session:
             query = session.query(EpisodeRecord)
-            
+
             if project_name:
                 query = query.filter(EpisodeRecord.project_name == project_name)
             if start_date:
                 query = query.filter(EpisodeRecord.timestamp >= start_date)
             if end_date:
                 query = query.filter(EpisodeRecord.timestamp <= end_date)
-                
+
             records = query.order_by(
                 EpisodeRecord.timestamp.desc()
             ).limit(limit).all()
-            
+
             return [self._record_to_episode(r) for r in records]
-    
+
     def get_lessons_learned(
         self,
         project_name: Optional[str] = None,
         tags: Optional[list[str]] = None
     ) -> list[dict]:
         """
-        Agregar lecciones aprendidas de múltiples episodios.
+        Aggregate lessons learned from multiple episodes.
         """
         with self._get_session() as session:
             query = session.query(EpisodeRecord).filter(
                 EpisodeRecord.lessons_learned_json != "[]"
             )
-            
+
             if project_name:
                 query = query.filter(EpisodeRecord.project_name == project_name)
-                
+
             records = query.order_by(EpisodeRecord.timestamp.desc()).all()
-            
+
             lessons = []
             for record in records:
                 record_lessons = json.loads(record.lessons_learned_json)
                 record_tags = json.loads(record.tags_json)
-                
-                # Filtrar por tags si se especifican
+
+                # Filter by tags if specified
                 if tags and not any(t in record_tags for t in tags):
                     continue
-                    
+
                 for lesson in record_lessons:
                     lessons.append({
                         "lesson": lesson,
@@ -629,34 +639,34 @@ class MemoryStorage:
                         "tags": record_tags,
                         "episode_id": record.id
                     })
-                    
+
             return lessons
-    
+
     def get_all_projects(self) -> list[str]:
-        """Obtener lista de todos los proyectos únicos."""
+        """Get list of all unique projects."""
         with self._get_session() as session:
             projects = session.query(EpisodeRecord.project_name).distinct().all()
             return sorted([p[0] for p in projects if p[0]])
-    
+
     def get_statistics(self, project_name: Optional[str] = None) -> dict:
-        """Obtener estadísticas del almacenamiento."""
+        """Get storage statistics."""
         with self._get_session() as session:
             query = session.query(EpisodeRecord)
-            
+
             if project_name:
                 query = query.filter(EpisodeRecord.project_name == project_name)
-                
+
             total = query.count()
-            
-            # Contar por tipo
+
+            # Count by type
             type_counts = {}
             for episode_type in EpisodeType:
                 count = query.filter(
                     EpisodeRecord.episode_type == episode_type.value
                 ).count()
                 type_counts[episode_type.value] = count
-                
-            # Contar por asistente (obtener valores únicos primero)
+
+            # Count by assistant (get unique values first)
             assistant_counts = {}
             assistants = session.query(EpisodeRecord.source_assistant).distinct().all()
             for (assistant,) in assistants:
@@ -670,18 +680,18 @@ class MemoryStorage:
                         EpisodeRecord.source_assistant == assistant
                     ).count()
                 assistant_counts[assistant] = count
-                
+
             return {
                 "total_episodes": total,
                 "by_type": type_counts,
                 "by_assistant": assistant_counts,
                 "chroma_count": self.collection.count()
             }
-    
+
     def _record_to_episode(self, record: EpisodeRecord) -> Episode:
-        """Convertir registro SQLite a Episode."""
+        """Convert SQLite record to Episode."""
         reasoning_data = json.loads(record.reasoning_trace_json)
-        
+
         return Episode(
             id=UUID(record.id),
             timestamp=record.timestamp,
@@ -698,11 +708,11 @@ class MemoryStorage:
             lessons_learned=json.loads(record.lessons_learned_json),
             source_assistant=record.source_assistant,
             project_name=record.project_name,
-            # Campos para Forgetting Curve (con defaults para compatibilidad)
+            # Forgetting Curve fields (with defaults for compatibility)
             importance_score=record.importance_score if record.importance_score is not None else 1.0,
             access_count=record.access_count if record.access_count is not None else 0,
             last_accessed=record.last_accessed,
-            # Campos para memoria activa (con defaults para compatibilidad)
+            # Active memory fields (with defaults for compatibility)
             is_antipattern=getattr(record, 'is_antipattern', False) or False,
             is_critical=getattr(record, 'is_critical', False) or False,
             superseded_by=UUID(record.superseded_by) if getattr(record, 'superseded_by', None) else None,
@@ -710,48 +720,48 @@ class MemoryStorage:
         )
 
     # =========================================================================
-    # MÉTODOS PARA META-MEMORIAS
+    # META-MEMORY METHODS
     # =========================================================================
-    
+
     def _generate_meta_embedding(self, meta_memory: MetaMemory) -> list[float]:
         """
-        Generar embedding para una meta-memoria.
-        Combina patrón, lecciones y contextos.
+        Generate embedding for a meta-memory.
+        Combines pattern, lessons, and contexts.
         """
         text_parts = [
-            f"Patrón: {meta_memory.pattern}",
-            f"Resumen: {meta_memory.pattern_summary}",
+            f"Pattern: {meta_memory.pattern}",
+            f"Summary: {meta_memory.pattern_summary}",
         ]
-        
+
         if meta_memory.lessons:
-            text_parts.append(f"Lecciones: {' '.join(meta_memory.lessons)}")
+            text_parts.append(f"Lessons: {' '.join(meta_memory.lessons)}")
         if meta_memory.best_practices:
-            text_parts.append(f"Mejores prácticas: {' '.join(meta_memory.best_practices)}")
+            text_parts.append(f"Best practices: {' '.join(meta_memory.best_practices)}")
         if meta_memory.contexts:
-            text_parts.append(f"Contextos: {' '.join(meta_memory.contexts)}")
+            text_parts.append(f"Contexts: {' '.join(meta_memory.contexts)}")
         if meta_memory.technologies:
-            text_parts.append(f"Tecnologías: {' '.join(meta_memory.technologies)}")
-            
+            text_parts.append(f"Technologies: {' '.join(meta_memory.technologies)}")
+
         combined_text = "\n".join(text_parts)
         embedding = self.embedder.encode(combined_text).tolist()
         return embedding
-    
+
     def store_meta_memory(self, meta_memory: MetaMemory) -> str:
         """
-        Almacenar una meta-memoria en ambas bases de datos.
-        
+        Store a meta-memory in both databases.
+
         Args:
-            meta_memory: Meta-memoria a almacenar
-            
+            meta_memory: Meta-memory to store
+
         Returns:
-            ID de la meta-memoria almacenada
+            ID of the stored meta-memory
         """
         meta_id = str(meta_memory.id)
-        
-        # Generar embedding
+
+        # Generate embedding
         embedding = self._generate_meta_embedding(meta_memory)
-        
-        # Almacenar en ChromaDB
+
+        # Store in ChromaDB
         self.meta_collection.add(
             ids=[meta_id],
             embeddings=[embedding],
@@ -765,11 +775,11 @@ class MemoryStorage:
             }],
             documents=[meta_memory.pattern]
         )
-        
-        # Convertir source_episode_ids a JSON
+
+        # Convert source_episode_ids to JSON
         source_ids_json = json.dumps([str(uid) for uid in meta_memory.source_episode_ids])
-        
-        # Almacenar en SQLite
+
+        # Store in SQLite
         with self._get_session() as session:
             record = MetaMemoryRecord(
                 id=meta_id,
@@ -796,9 +806,9 @@ class MemoryStorage:
             )
             session.add(record)
             session.commit()
-            
+
         return meta_id
-    
+
     def search_meta_memories(
         self,
         query: str,
@@ -806,128 +816,128 @@ class MemoryStorage:
         top_k: int = 5
     ) -> list[MetaMemorySearchResult]:
         """
-        Buscar meta-memorias relevantes usando búsqueda vectorial.
-        
+        Search for relevant meta-memories using vector search.
+
         Args:
-            query: Texto de búsqueda
-            project_name: Filtrar por proyecto
-            top_k: Número de resultados
-            
+            query: Search text
+            project_name: Filter by project
+            top_k: Number of results
+
         Returns:
-            Lista de resultados ordenados por relevancia
+            List of results ordered by relevance
         """
-        # Generar embedding de la consulta
+        # Generate query embedding
         query_embedding = self.embedder.encode(query).tolist()
-        
-        # Construir filtros
+
+        # Build filters
         where_filters = {}
         if project_name:
             where_filters["project_name"] = project_name
-        
-        # Búsqueda vectorial
+
+        # Vector search
         results = self.meta_collection.query(
             query_embeddings=[query_embedding],
             n_results=top_k,
             where=where_filters if where_filters else None,
             include=["metadatas", "distances", "documents"]
         )
-        
-        # Convertir resultados
+
+        # Convert results
         search_results = []
-        
+
         if results["ids"] and results["ids"][0]:
             for i, meta_id in enumerate(results["ids"][0]):
-                # Recuperar meta-memoria completa de SQLite
+                # Retrieve full meta-memory from SQLite
                 meta_memory = self.get_meta_memory_by_id(meta_id)
                 if meta_memory:
-                    # Calcular score
+                    # Calculate score
                     distance = results["distances"][0][i] if results["distances"] else 0
                     relevance_score = max(0, 1 - distance / 2)
-                    
+
                     search_results.append(MetaMemorySearchResult(
                         meta_memory=meta_memory,
                         relevance_score=relevance_score,
-                        match_reason=f"Patrón consolidado de {meta_memory.episode_count} episodios"
+                        match_reason=f"Consolidated pattern from {meta_memory.episode_count} episodes"
                     ))
-        
-        # Actualizar estadísticas de acceso
+
+        # Update access statistics
         for result in search_results:
             self.update_meta_memory_access(str(result.meta_memory.id))
-        
+
         return search_results
-    
+
     def get_meta_memory_by_id(self, meta_id: str) -> Optional[MetaMemory]:
-        """Recuperar una meta-memoria por su ID."""
+        """Retrieve a meta-memory by its ID."""
         with self._get_session() as session:
             record = session.query(MetaMemoryRecord).filter(
                 MetaMemoryRecord.id == meta_id
             ).first()
-            
+
             if not record:
                 return None
-                
+
             return self._record_to_meta_memory(record)
-    
+
     def get_meta_memories_by_project(
         self,
         project_name: str,
         limit: int = 50
     ) -> list[MetaMemory]:
-        """Obtener meta-memorias de un proyecto específico."""
+        """Get meta-memories from a specific project."""
         with self._get_session() as session:
             records = session.query(MetaMemoryRecord).filter(
                 MetaMemoryRecord.project_name == project_name
             ).order_by(MetaMemoryRecord.created_at.desc()).limit(limit).all()
-            
+
             return [self._record_to_meta_memory(r) for r in records]
-    
+
     def update_meta_memory_access(self, meta_id: str) -> bool:
-        """Actualizar estadísticas de acceso de una meta-memoria."""
+        """Update access statistics of a meta-memory."""
         with self._get_session() as session:
             record = session.query(MetaMemoryRecord).filter(
                 MetaMemoryRecord.id == meta_id
             ).first()
-            
+
             if not record:
                 return False
-            
+
             record.access_count = (record.access_count or 0) + 1
             record.last_accessed = datetime.now(timezone.utc)
-            
+
             session.commit()
             return True
-    
+
     def get_meta_memory_statistics(self, project_name: Optional[str] = None) -> dict:
-        """Obtener estadísticas de meta-memorias."""
+        """Get meta-memory statistics."""
         with self._get_session() as session:
             query = session.query(MetaMemoryRecord)
-            
+
             if project_name:
                 query = query.filter(MetaMemoryRecord.project_name == project_name)
-                
+
             total = query.count()
-            
-            # Episodios totales consolidados
+
+            # Total consolidated episodes
             total_episodes = 0
             avg_confidence = 0.0
-            
+
             if total > 0:
                 records = query.all()
                 total_episodes = sum(r.episode_count for r in records)
                 avg_confidence = sum(r.confidence for r in records) / total
-                
+
             return {
                 "total_meta_memories": total,
                 "total_episodes_consolidated": total_episodes,
                 "average_confidence": round(avg_confidence, 3),
                 "chroma_count": self.meta_collection.count()
             }
-    
+
     def _record_to_meta_memory(self, record: MetaMemoryRecord) -> MetaMemory:
-        """Convertir registro SQLite a MetaMemory."""
-        # Parsear source_episode_ids de JSON a lista de UUIDs
+        """Convert SQLite record to MetaMemory."""
+        # Parse source_episode_ids from JSON to UUID list
         source_ids = [UUID(uid) for uid in json.loads(record.source_episode_ids_json)]
-        
+
         return MetaMemory(
             id=UUID(record.id),
             created_at=record.created_at,

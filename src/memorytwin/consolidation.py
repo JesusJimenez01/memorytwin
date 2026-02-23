@@ -1,15 +1,15 @@
 """
-Consolidación de Memorias
-=========================
+Memory Consolidation
+====================
 
-Implementa el proceso de consolidación de episodios relacionados
-en meta-memorias, siguiendo un enfoque inspirado en la consolidación
-de la memoria humana durante el sueño.
+Implements the consolidation process that groups related episodes
+into meta-memories, following an approach inspired by human memory
+consolidation during sleep.
 
-El proceso:
-1. Agrupa episodios similares usando clustering por embeddings
-2. Para cada cluster, usa un LLM para sintetizar el conocimiento
-3. Genera una MetaMemory con patrones, lecciones y excepciones
+Process:
+1. Groups similar episodes using embedding-based clustering
+2. For each cluster, uses an LLM to synthesize the knowledge
+3. Generates a MetaMemory with patterns, lessons, and exceptions
 """
 
 import json
@@ -22,26 +22,26 @@ import numpy as np
 from sklearn.cluster import DBSCAN
 
 from memorytwin.config import get_llm_model
-from memorytwin.observability import trace_consolidation
-from memorytwin.models import Episode, MetaMemory
 from memorytwin.escriba.storage import MemoryStorage
+from memorytwin.models import Episode, MetaMemory
+from memorytwin.observability import trace_consolidation
 
 logger = logging.getLogger(__name__)
 
 
-# Prompt para síntesis de episodios en meta-memoria (optimizado para rapidez)
-CONSOLIDATION_PROMPT = """Sintetiza estos episodios de memoria técnica en una meta-memoria consolidada.
+# Prompt for synthesizing episodes into a meta-memory (optimized for speed)
+CONSOLIDATION_PROMPT = """Synthesize these technical memory episodes into a consolidated meta-memory.
 
-EPISODIOS:
+EPISODES:
 {episodes_text}
 
-Responde SOLO en JSON:
+Respond ONLY in JSON:
 {{
-    "pattern": "Patrón común identificado (1-2 oraciones)",
-    "pattern_summary": "Resumen en 1 oración corta",
-    "lessons": ["lección 1", "lección 2"],
-    "best_practices": ["práctica 1"],
-    "antipatterns": ["antipatrón 1"],
+    "pattern": "Common pattern identified (1-2 sentences)",
+    "pattern_summary": "Summary in 1 short sentence",
+    "lessons": ["lesson 1", "lesson 2"],
+    "best_practices": ["practice 1"],
+    "antipatterns": ["antipattern 1"],
     "technologies": ["tech1", "tech2"],
     "coherence_score": 0.8
 }}
@@ -49,47 +49,45 @@ Responde SOLO en JSON:
 
 
 def format_episode_for_consolidation(episode: Episode) -> str:
-    """Formatear un episodio para incluirlo en el prompt de consolidación (versión compacta)."""
-    # Limitar razonamiento a 200 chars para mantener prompts pequeños
+    """Format an episode for the consolidation prompt (compact version)."""
     reasoning = episode.reasoning_trace.raw_thinking[:200] if episode.reasoning_trace.raw_thinking else ""
     lessons = ', '.join(episode.lessons_learned[:2]) if episode.lessons_learned else 'N/A'
-    
+
     return f"""[{episode.timestamp.strftime('%Y-%m-%d')}] {episode.task}
-Solución: {episode.solution_summary[:100]}
-Lecciones: {lessons}"""
+Reasoning: {reasoning}
+Solution: {episode.solution_summary[:100]}
+Lessons: {lessons}"""
 
 
 class MemoryConsolidator:
     """
-    Consolida episodios relacionados en meta-memorias.
-    
-    Usa clustering por embeddings para agrupar episodios similares
-    y un LLM para sintetizar el conocimiento consolidado.
+    Consolidates related episodes into meta-memories.
+
+    Uses embedding-based clustering to group similar episodes
+    and an LLM to synthesize the consolidated knowledge.
     """
-    
+
     def __init__(
         self,
         storage: Optional[MemoryStorage] = None,
-        api_key: Optional[str] = None,
         min_cluster_size: int = 3,
-        cluster_eps: float = 0.4,  # Balance entre cohesión y cobertura
-        max_episodes_per_cluster: int = 8  # Limitar tamaño de prompts
+        cluster_eps: float = 0.4,
+        max_episodes_per_cluster: int = 8,
     ):
         """
-        Inicializar el consolidador.
-        
+        Initialize the consolidator.
+
         Args:
-            storage: Almacenamiento de memoria
-            api_key: DEPRECATED - ya no se usa, la API key se lee de config.
-            min_cluster_size: Mínimo de episodios para formar cluster
-            cluster_eps: Radio máximo para clustering DBSCAN (menor = más estricto)
-            max_episodes_per_cluster: Máximo de episodios por cluster para limitar prompts
+            storage: Memory storage instance
+            min_cluster_size: Minimum episodes to form a cluster
+            cluster_eps: Maximum radius for DBSCAN clustering (lower = stricter)
+            max_episodes_per_cluster: Max episodes per cluster to limit prompt size
         """
         self.storage = storage or MemoryStorage()
-        
-        # Usar factory centralizada (temperatura baja, tokens reducidos para rapidez)
+
+        # Use centralized factory (low temperature, reduced tokens for speed)
         self.model = get_llm_model(temperature=0.2, max_output_tokens=1024)
-        
+
         self.min_cluster_size = min_cluster_size
         self.cluster_eps = cluster_eps
         self.max_episodes_per_cluster = max_episodes_per_cluster
@@ -100,119 +98,119 @@ class MemoryConsolidator:
         force: bool = False
     ) -> list[MetaMemory]:
         """
-        Consolidar episodios de un proyecto en meta-memorias.
-        
+        Consolidate a project's episodes into meta-memories.
+
         Args:
-            project_name: Nombre del proyecto
-            force: Si True, reconsolida incluso episodios ya consolidados
-            
+            project_name: Project name
+            force: If True, reconsolidate even already-consolidated episodes
+
         Returns:
-            Lista de meta-memorias generadas
+            List of generated meta-memories
         """
-        logger.info(f"Iniciando consolidación para proyecto: {project_name}")
-        
-        # Obtener episodios del proyecto
+        logger.info(f"Starting consolidation for project: {project_name}")
+
+        # Get project episodes
         episodes = self.storage.get_episodes_by_project(project_name, limit=200)
-        logger.info(f"Encontrados {len(episodes)} episodios")
-        
+        logger.info(f"Found {len(episodes)} episodes")
+
         if len(episodes) < self.min_cluster_size:
-            logger.info(f"Insuficientes episodios ({len(episodes)} < {self.min_cluster_size})")
+            logger.info(f"Insufficient episodes ({len(episodes)} < {self.min_cluster_size})")
             return []
-        
-        # Obtener embeddings de ChromaDB
+
+        # Get embeddings from ChromaDB
         embeddings, episode_ids = self._get_episode_embeddings(episodes)
-        logger.info(f"Obtenidos {len(embeddings)} embeddings")
-        
+        logger.info(f"Retrieved {len(embeddings)} embeddings")
+
         if len(embeddings) < self.min_cluster_size:
-            logger.info("Insuficientes embeddings")
+            logger.info("Insufficient embeddings")
             return []
-        
+
         # Clustering
         clusters = self._cluster_episodes(embeddings, episode_ids)
-        logger.info(f"Generados {len(clusters)} clusters")
-        
-        # Generar meta-memorias para cada cluster
+        logger.info(f"Generated {len(clusters)} clusters")
+
+        # Generate meta-memories for each cluster
         meta_memories = []
         for i, cluster_episode_ids in enumerate(clusters):
-            logger.info(f"Procesando cluster {i+1}/{len(clusters)} ({len(cluster_episode_ids)} episodios)")
-            
-            # Obtener episodios del cluster
+            logger.info(f"Processing cluster {i+1}/{len(clusters)} ({len(cluster_episode_ids)} episodes)")
+
+            # Get cluster episodes
             cluster_episodes = [
-                ep for ep in episodes 
+                ep for ep in episodes
                 if str(ep.id) in cluster_episode_ids
             ]
-            
-            # Limitar episodios por cluster para evitar prompts enormes
+
+            # Limit episodes per cluster to avoid huge prompts
             if len(cluster_episodes) > self.max_episodes_per_cluster:
-                # Seleccionar los más recientes
+                # Select the most recent ones
                 cluster_episodes = sorted(
-                    cluster_episodes, 
-                    key=lambda e: e.timestamp, 
+                    cluster_episodes,
+                    key=lambda e: e.timestamp,
                     reverse=True
                 )[:self.max_episodes_per_cluster]
-                logger.info(f"Cluster limitado a {self.max_episodes_per_cluster} episodios más recientes")
-            
+                logger.info(f"Cluster limited to {self.max_episodes_per_cluster} most recent episodes")
+
             if len(cluster_episodes) >= self.min_cluster_size:
-                logger.info(f"Sintetizando cluster {i+1} con LLM...")
+                logger.info(f"Synthesizing cluster {i+1} with LLM...")
                 meta_memory = self._synthesize_cluster(
-                    cluster_episodes, 
+                    cluster_episodes,
                     project_name
                 )
                 if meta_memory:
-                    # Almacenar
+                    # Store
                     self.storage.store_meta_memory(meta_memory)
                     meta_memories.append(meta_memory)
-                    logger.info(f"Meta-memoria {i+1} creada: {meta_memory.pattern_summary[:50]}...")
-        
-        logger.info(f"Consolidación completada: {len(meta_memories)} meta-memorias generadas")
+                    logger.info(f"Meta-memory {i+1} created: {meta_memory.pattern_summary[:50]}...")
+
+        logger.info(f"Consolidation completed: {len(meta_memories)} meta-memories generated")
         return meta_memories
-    
+
     def _get_episode_embeddings(
-        self, 
+        self,
         episodes: list[Episode]
     ) -> tuple[np.ndarray, list[str]]:
-        """Obtener embeddings de episodios desde ChromaDB."""
+        """Get episode embeddings from ChromaDB."""
         episode_ids = [str(ep.id) for ep in episodes]
-        
-        # Obtener embeddings de ChromaDB
+
+        # Get embeddings from ChromaDB
         result = self.storage.collection.get(
             ids=episode_ids,
             include=["embeddings"]
         )
-        
+
         if result["embeddings"] is None or len(result["embeddings"]) == 0:
             return np.array([]), []
-        
+
         embeddings = np.array(result["embeddings"])
         valid_ids = result["ids"]
-        
+
         return embeddings, valid_ids
 
     def _cluster_episodes(
-        self, 
+        self,
         embeddings: np.ndarray,
         episode_ids: list[str]
     ) -> list[list[str]]:
         """
-        Agrupar episodios por similitud usando DBSCAN.
-        
-        DBSCAN es ideal porque:
-        - No requiere especificar número de clusters
-        - Puede detectar clusters de forma arbitraria
-        - Identifica outliers (episodios únicos)
+        Group episodes by similarity using DBSCAN.
+
+        DBSCAN is ideal because:
+        - It does not require specifying the number of clusters
+        - It can detect arbitrarily shaped clusters
+        - It identifies outliers (unique episodes)
         """
-        # Normalizar embeddings para usar distancia coseno
+        # Normalize embeddings for cosine distance
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
         normalized = embeddings / (norms + 1e-10)
-        
-        # DBSCAN con distancia coseno (convertida a distancia)
+
+        # DBSCAN with cosine distance
         clustering = DBSCAN(
             eps=self.cluster_eps,
             min_samples=self.min_cluster_size,
             metric='cosine'
         ).fit(normalized)
-        
-        # Agrupar IDs por label de cluster
+
+        # Group IDs by cluster label
         clusters = {}
         for idx, label in enumerate(clustering.labels_):
             if label == -1:  # Outlier
@@ -220,7 +218,7 @@ class MemoryConsolidator:
             if label not in clusters:
                 clusters[label] = []
             clusters[label].append(episode_ids[idx])
-        
+
         return list(clusters.values())
 
     @trace_consolidation
@@ -230,50 +228,50 @@ class MemoryConsolidator:
         project_name: str
     ) -> Optional[MetaMemory]:
         """
-        Usar LLM para sintetizar un cluster de episodios.
-        
+        Use LLM to synthesize a cluster of episodes.
+
         Args:
-            episodes: Episodios del cluster
-            project_name: Nombre del proyecto
-            
+            episodes: Cluster episodes
+            project_name: Project name
+
         Returns:
-            MetaMemory generada o None si falla
+            Generated MetaMemory or None on failure
         """
-        # Formatear episodios para el prompt
+        # Format episodes for the prompt
         episodes_text = "\n---\n".join(
             format_episode_for_consolidation(ep) for ep in episodes
         )
-        
+
         prompt = CONSOLIDATION_PROMPT.format(episodes_text=episodes_text)
-        
+
         try:
-            # Llamar al LLM (interfaz unificada)
+            # Call the LLM (unified interface)
             response = self.model.generate(prompt)
-            
-            # Parsear respuesta JSON
+
+            # Parse JSON response
             response_text = response.text.strip()
-            
-            # Limpiar posibles marcadores de código
+
+            # Clean possible code markers
             if response_text.startswith("```json"):
                 response_text = response_text[7:]
             if response_text.startswith("```"):
                 response_text = response_text[3:]
             if response_text.endswith("```"):
                 response_text = response_text[:-3]
-            
+
             data = json.loads(response_text.strip())
-            
-            # Calcular confianza basada en número de episodios
-            # Más episodios = mayor confianza (hasta cierto punto)
+
+            # Calculate confidence based on number of episodes
+            # More episodes = higher confidence (up to a point)
             confidence = min(0.95, 0.5 + (len(episodes) * 0.1))
-            
-            # Crear MetaMemory
+
+            # Create MetaMemory
             now = datetime.now(timezone.utc)
             meta_memory = MetaMemory(
                 id=uuid4(),
                 created_at=now,
                 updated_at=now,
-                pattern=data.get("pattern", "Patrón no identificado"),
+                pattern=data.get("pattern", "Pattern not identified"),
                 pattern_summary=data.get("pattern_summary", ""),
                 lessons=data.get("lessons", []),
                 best_practices=data.get("best_practices", []),
@@ -289,34 +287,34 @@ class MemoryConsolidator:
                 project_name=project_name,
                 tags=self._extract_common_tags(episodes)
             )
-            
+
             return meta_memory
-            
+
         except json.JSONDecodeError as e:
-            print(f"Error parseando respuesta del LLM: {e}")
+            print(f"Error parsing LLM response: {e}")
             return None
         except Exception as e:
-            print(f"Error en síntesis: {e}")
+            print(f"Error in synthesis: {e}")
             return None
-    
+
     def _extract_common_tags(self, episodes: list[Episode]) -> list[str]:
-        """Extraer tags comunes entre episodios."""
+        """Extract common tags across episodes."""
         if not episodes:
             return []
-        
-        # Contar frecuencia de tags
+
+        # Count tag frequency
         tag_counts = {}
         for ep in episodes:
             for tag in ep.tags:
                 tag_counts[tag] = tag_counts.get(tag, 0) + 1
-        
-        # Retornar tags que aparecen en al menos 50% de episodios
+
+        # Return tags that appear in at least 50% of episodes
         threshold = len(episodes) / 2
         common_tags = [
-            tag for tag, count in tag_counts.items() 
+            tag for tag, count in tag_counts.items()
             if count >= threshold
         ]
-        
+
         return common_tags
 
 
@@ -326,19 +324,19 @@ def consolidate_memories(
     storage: Optional[MemoryStorage] = None
 ) -> list[MetaMemory]:
     """
-    Función de conveniencia para consolidar memorias de un proyecto.
-    
+    Convenience function to consolidate a project's memories.
+
     Args:
-        project_name: Nombre del proyecto a consolidar
-        min_cluster_size: Mínimo de episodios por cluster
-        storage: Almacenamiento (opcional)
-        
+        project_name: Project name to consolidate
+        min_cluster_size: Minimum episodes per cluster
+        storage: Storage instance (optional)
+
     Returns:
-        Lista de meta-memorias generadas
+        List of generated meta-memories
     """
     consolidator = MemoryConsolidator(
         storage=storage,
         min_cluster_size=min_cluster_size
     )
-    
+
     return consolidator.consolidate_project(project_name)

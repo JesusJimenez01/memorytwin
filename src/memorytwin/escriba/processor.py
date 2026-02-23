@@ -1,90 +1,85 @@
 """
-Procesador de Pensamientos - LLM para estructurar razonamiento
-==============================================================
+Thought Processor - LLM-based reasoning structuring
+====================================================
 
-Utiliza Gemini Flash (u otro LLM) para convertir texto crudo
-de "thinking" en episodios estructurados de memoria.
+Uses an LLM (e.g., Gemini Flash) to convert raw
+"thinking" text into structured memory episodes.
 """
 
 import json
 import logging
+import re
 from typing import Optional
 
 from tenacity import (
+    before_sleep_log,
     retry,
+    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
-    before_sleep_log,
 )
+
 from memorytwin.config import get_llm_model, get_settings
 from memorytwin.models import Episode, EpisodeType, ProcessedInput, ReasoningTrace
-from memorytwin.observability import trace_store_memory, _get_langfuse, _is_disabled, flush_traces
+from memorytwin.observability import _get_langfuse, _is_disabled, flush_traces, trace_store_memory
 
-
-# Configurar logging
 logger = logging.getLogger("memorytwin.processor")
 
 
-# Excepciones que merecen retry
-RETRYABLE_EXCEPTIONS = (
-    Exception,  # TODO: Refinar con excepciones específicas de Gemini
-)
+# Exceptions that merit retry (broad catch - LLM APIs can raise various errors)
+RETRYABLE_EXCEPTIONS = (Exception,)
 
 
-# Prompt del sistema para estructurar pensamientos
-STRUCTURING_PROMPT = """Eres un asistente especializado en analizar y estructurar el razonamiento técnico de asistentes de IA durante el desarrollo de software.
+# System prompt for structuring thoughts
+STRUCTURING_PROMPT = """You are an assistant specialized in analyzing and structuring the technical reasoning \
+of AI assistants during software development.
 
-Tu tarea es convertir texto crudo de "thinking" (razonamiento visible) de un asistente de código en un episodio de memoria estructurado.
+Your task is to convert raw "thinking" text (visible reasoning) from a code assistant into a structured memory episode.
 
-ENTRADA:
-- Texto de razonamiento del modelo (thinking visible)
-- Opcionalmente: prompt original del usuario y cambios de código
+INPUT:
+- Model's reasoning text (visible thinking)
+- Optionally: original user prompt and code changes
 
-SALIDA (JSON estricto):
+OUTPUT (strict JSON):
 {
-    "task": "Descripción concisa de la tarea o problema abordado",
-    "context": "Contexto técnico: archivos, módulos, tecnologías involucradas",
+    "task": "Concise description of the task or problem addressed",
+    "context": "Technical context: files, modules, technologies involved",
     "reasoning_trace": {
-        "raw_thinking": "Resumen del razonamiento principal (máx 500 palabras)",
-        "alternatives_considered": ["alternativa 1 descartada", "alternativa 2 descartada"],
-        "decision_factors": ["factor 1 que influyó", "factor 2 que influyó"],
+        "raw_thinking": "Summary of the main reasoning (max 500 words)",
+        "alternatives_considered": ["discarded alternative 1", "discarded alternative 2"],
+        "decision_factors": ["influencing factor 1", "influencing factor 2"],
         "confidence_level": 0.85
     },
-    "solution": "Código o solución implementada (extracto relevante)",
-    "solution_summary": "Resumen ejecutivo de la solución en 1-2 oraciones",
+    "solution": "Code or implemented solution (relevant excerpt)",
+    "solution_summary": "Executive summary of the solution in 1-2 sentences",
     "episode_type": "decision|bug_fix|refactor|feature|optimization|learning|experiment",
     "tags": ["tag1", "tag2", "tag3"],
-    "files_affected": ["archivo1.py", "archivo2.ts"],
-    "lessons_learned": ["lección 1", "lección 2"]
+    "files_affected": ["file1.py", "file2.ts"],
+    "lessons_learned": ["lesson 1", "lesson 2"]
 }
 
-REGLAS:
-1. Sé conciso pero completo
-2. Extrae TODAS las alternativas consideradas y descartadas
-3. Identifica los factores de decisión clave
-4. Asigna un nivel de confianza basado en el tono del razonamiento
-5. Genera tags relevantes para búsqueda futura
-6. Extrae lecciones aprendidas si las hay (errores evitados, patrones descubiertos)
-7. SIEMPRE responde con JSON válido, sin texto adicional
+RULES:
+1. Be concise but complete
+2. Extract ALL considered and discarded alternatives
+3. Identify key decision factors
+4. Assign a confidence level based on the reasoning tone
+5. Generate relevant tags for future searching
+6. Extract lessons learned if any (avoided errors, discovered patterns)
+7. ALWAYS respond with valid JSON, no additional text
 """
 
 
 class ThoughtProcessor:
     """
-    Procesador de pensamientos usando LLM.
-    Convierte texto crudo en episodios estructurados.
+    Thought processor using LLM.
+    Converts raw thinking text into structured episodes.
     """
-    
-    def __init__(self, api_key: Optional[str] = None):
-        """Inicializar procesador con modelo LLM.
-        
-        Args:
-            api_key: DEPRECATED - ya no se usa, la API key se lee de config.
-        """
-        # Usar factory centralizada (respuesta JSON)
+
+    def __init__(self):
+        """Initialize processor with LLM model."""
+        # Use centralized factory (JSON response)
         self.model = get_llm_model(response_mime_type="application/json")
-        
+
     @trace_store_memory
     @retry(
         stop=stop_after_attempt(3),
@@ -99,46 +94,52 @@ class ThoughtProcessor:
         source_assistant: str = "unknown"
     ) -> Episode:
         """
-        Procesar pensamiento crudo y convertirlo en episodio estructurado.
-        
+        Process raw thinking and convert it into a structured episode.
+
         Args:
-            raw_input: Input capturado (thinking + contexto opcional)
-            project_name: Nombre del proyecto
-            source_assistant: Asistente fuente (copilot, claude, etc.)
-            
+            raw_input: Captured input (thinking + optional context)
+            project_name: Project name
+            source_assistant: Source assistant (copilot, claude, etc.)
+
         Returns:
-            Episode estructurado listo para almacenamiento
+            Structured Episode ready for storage
         """
         settings = get_settings()
-        
-        # Construir prompt con el input
+
+        # Build prompt with input
         user_content = self._build_user_prompt(raw_input)
-        
-        # Trazar generación del LLM
+
+        # Trace LLM generation
         langfuse = _get_langfuse() if not _is_disabled() else None
         generation = None
-        
+
         try:
             if langfuse:
                 generation = langfuse.start_as_current_generation(
-                    name="✍️ Escriba - Estructurar Pensamiento",
+                    name="Escriba - Structure Thought",
                     model=settings.llm_model,
                     model_parameters={"temperature": settings.llm_temperature},
                     input={"thinking_text": raw_input.raw_text[:500], "project": project_name}
                 ).__enter__()
-            
-            # Llamar al LLM (interfaz unificada)
+
+            # Call the LLM (unified interface)
             response = await self.model.generate_async(
                 [
                     {"role": "user", "parts": [STRUCTURING_PROMPT]},
-                    {"role": "model", "parts": ["Entendido. Estoy listo para estructurar el razonamiento técnico en formato JSON."]},
+                    {
+                        "role": "model",
+                        "parts": [
+                            "Understood. I'm ready to structure"
+                            " the technical reasoning in JSON format."
+                        ],
+                    },
                     {"role": "user", "parts": [user_content]}
                 ]
             )
-            
+
             if generation:
                 generation.update(output=response.text[:1000])
-                
+
         finally:
             if generation:
                 try:
@@ -147,66 +148,65 @@ class ThoughtProcessor:
                     pass
             if langfuse:
                 flush_traces()
-        
-        # Parsear respuesta JSON
+
+        # Parse JSON response
         try:
             structured_data = json.loads(response.text)
         except json.JSONDecodeError as e:
-            # Intentar extraer JSON si hay texto adicional
-            import re
+            # Try to extract JSON if there's extra text
             json_match = re.search(r'\{[\s\S]*\}', response.text)
             if json_match:
                 structured_data = json.loads(json_match.group())
             else:
-                raise ValueError(f"El LLM no devolvió JSON válido: {e}")
-        
-        # Construir Episode
+                raise ValueError(f"LLM did not return valid JSON: {e}")
+
+        # Build Episode
         episode = self._build_episode(
             structured_data,
             project_name=project_name,
             source_assistant=source_assistant
         )
-        
+
         return episode
-    
+
     def process_thought_sync(
         self,
         raw_input: ProcessedInput,
         project_name: str = "default",
         source_assistant: str = "unknown"
     ) -> Episode:
-        """Versión síncrona del procesamiento."""
+        """Synchronous version of process_thought."""
         import asyncio
         return asyncio.run(
             self.process_thought(raw_input, project_name, source_assistant)
         )
-    
+
     def _build_user_prompt(self, raw_input: ProcessedInput) -> str:
-        """Construir prompt de usuario con el input capturado."""
-        parts = ["## TEXTO DE RAZONAMIENTO (THINKING):\n"]
+        """Build user prompt with captured input."""
+        parts = ["## REASONING TEXT (THINKING):\n"]
         parts.append(raw_input.raw_text)
-        
+
         if raw_input.user_prompt:
-            parts.append("\n\n## PROMPT ORIGINAL DEL USUARIO:\n")
+            parts.append("\n\n## ORIGINAL USER PROMPT:\n")
             parts.append(raw_input.user_prompt)
-            
+
         if raw_input.code_changes:
-            parts.append("\n\n## CAMBIOS DE CÓDIGO:\n```\n")
+            parts.append("\n\n## CODE CHANGES:\n```\n")
             parts.append(raw_input.code_changes)
             parts.append("\n```")
-            
-        parts.append("\n\n---\nEstructura este razonamiento en el formato JSON especificado.")
-        
+
+        parts.append("\n\n---\nStructure this reasoning into the specified JSON format.")
+
         return "".join(parts)
-    
+
     def _build_episode(
         self,
         data: dict,
         project_name: str,
         source_assistant: str
     ) -> Episode:
-        """Construir Episode a partir de datos estructurados."""
-        # Parsear reasoning_trace
+        """Build an Episode from structured data."""
+        # Parse reasoning_trace
         rt_data = data.get("reasoning_trace", {})
         reasoning_trace = ReasoningTrace(
             raw_thinking=rt_data.get("raw_thinking", data.get("task", "")),
@@ -214,17 +214,17 @@ class ThoughtProcessor:
             decision_factors=rt_data.get("decision_factors", []),
             confidence_level=rt_data.get("confidence_level")
         )
-        
-        # Parsear episode_type
+
+        # Parse episode_type
         episode_type_str = data.get("episode_type", "decision")
         try:
             episode_type = EpisodeType(episode_type_str)
         except ValueError:
             episode_type = EpisodeType.DECISION
-            
+
         return Episode(
-            task=data.get("task", "Tarea no especificada"),
-            context=data.get("context", "Contexto no especificado"),
+            task=data.get("task", "Unspecified task"),
+            context=data.get("context", "Unspecified context"),
             reasoning_trace=reasoning_trace,
             solution=data.get("solution", ""),
             solution_summary=data.get("solution_summary", ""),
@@ -237,7 +237,7 @@ class ThoughtProcessor:
         )
 
 
-# Función de conveniencia para uso simple
+# Convenience function for simple usage
 async def process_thinking_text(
     thinking_text: str,
     user_prompt: Optional[str] = None,
@@ -246,17 +246,17 @@ async def process_thinking_text(
     source_assistant: str = "unknown"
 ) -> Episode:
     """
-    Función de conveniencia para procesar texto de thinking.
-    
+    Convenience function to process thinking text.
+
     Args:
-        thinking_text: Texto de razonamiento del modelo
-        user_prompt: Prompt original del usuario (opcional)
-        code_changes: Cambios de código asociados (opcional)
-        project_name: Nombre del proyecto
-        source_assistant: Asistente de código fuente
-        
+        thinking_text: Model's reasoning text
+        user_prompt: Original user prompt (optional)
+        code_changes: Associated code changes (optional)
+        project_name: Project name
+        source_assistant: Source code assistant
+
     Returns:
-        Episode estructurado
+        Structured Episode
     """
     processor = ThoughtProcessor()
     raw_input = ProcessedInput(

@@ -1,9 +1,9 @@
 """
-Escriba - Agente Principal de Ingesta de Memoria
-================================================
+Escriba - Main Memory Ingestion Agent
+======================================
 
-Coordina el procesamiento y almacenamiento de episodios
-de memoria técnica.
+Coordinates the processing and storage of
+technical memory episodes.
 """
 
 from datetime import datetime, timezone
@@ -12,21 +12,21 @@ from typing import Optional
 from rich.console import Console
 from rich.panel import Panel
 
-from memorytwin.models import Episode, ProcessedInput
 from memorytwin.escriba.processor import ThoughtProcessor
 from memorytwin.escriba.storage import MemoryStorage
+from memorytwin.models import Episode, ProcessedInput
 
 console = Console()
 
 
 class Escriba:
     """
-    Agente Escriba - Observador pasivo y documentador activo.
-    
-    Captura el razonamiento de asistentes de IA, lo estructura
-    usando un LLM ligero y lo almacena para consulta futura.
+    Escriba Agent - Passive observer and active documenter.
+
+    Captures AI assistant reasoning, structures it
+    using a lightweight LLM, and stores it for future queries.
     """
-    
+
     def __init__(
         self,
         processor: Optional[ThoughtProcessor] = None,
@@ -34,24 +34,24 @@ class Escriba:
         project_name: str = "default"
     ):
         """
-        Inicializar el Escriba.
-        
+        Initialize Escriba.
+
         Args:
-            processor: Procesador de pensamientos (se crea uno si no se provee)
-            storage: Almacenamiento de memoria (se crea uno si no se provee)
-            project_name: Nombre del proyecto por defecto
+            processor: Thought processor (creates one if not provided)
+            storage: Memory storage (creates one if not provided)
+            project_name: Default project name
         """
         self.processor = processor or ThoughtProcessor()
         self.storage = storage or MemoryStorage()
         self.project_name = project_name
-        
+
         console.print(Panel(
-            f"[bold green]✓ Escriba inicializado[/bold green]\n"
-            f"Proyecto: {project_name}",
+            f"[bold green]✓ Escriba initialized[/bold green]\n"
+            f"Project: {project_name}",
             title="Memory Twin - Escriba",
             border_style="green"
         ))
-        
+
     async def capture_thinking(
         self,
         thinking_text: str,
@@ -61,25 +61,25 @@ class Escriba:
         project_name: Optional[str] = None
     ) -> Episode:
         """
-        Capturar y procesar texto de "thinking" de un asistente.
-        
+        Capture and process "thinking" text from an assistant.
+
         Args:
-            thinking_text: Texto de razonamiento visible del modelo
-            user_prompt: Prompt original del usuario
-            code_changes: Cambios de código asociados
-            source_assistant: Asistente fuente (copilot, claude, cursor)
-            project_name: Nombre del proyecto (usa el default si no se especifica)
-            
+            thinking_text: Visible reasoning text from the model
+            user_prompt: Original user prompt
+            code_changes: Associated code changes
+            source_assistant: Source assistant (copilot, claude, cursor)
+            project_name: Project name (uses default if not specified)
+
         Returns:
-            Episode estructurado y almacenado
+            Structured and stored Episode
         """
         project = project_name or self.project_name
-        
-        console.print(f"[yellow]📝 Capturando pensamiento...[/yellow]")
-        console.print(f"   Fuente: {source_assistant}")
-        console.print(f"   Proyecto: {project}")
-        
-        # Crear input procesado
+
+        console.print("[yellow]📝 Capturing thought...[/yellow]")
+        console.print(f"   Source: {source_assistant}")
+        console.print(f"   Project: {project}")
+
+        # Create processed input
         raw_input = ProcessedInput(
             raw_text=thinking_text,
             user_prompt=user_prompt,
@@ -87,31 +87,31 @@ class Escriba:
             source="api",
             captured_at=datetime.now(timezone.utc)
         )
-        
-        # Procesar con LLM
-        console.print(f"[yellow]🔄 Estructurando con LLM...[/yellow]")
+
+        # Process with LLM
+        console.print("[yellow]🔄 Structuring with LLM...[/yellow]")
         episode = await self.processor.process_thought(
             raw_input,
             project_name=project,
             source_assistant=source_assistant
         )
-        
-        # Almacenar
-        console.print(f"[yellow]💾 Almacenando episodio...[/yellow]")
+
+        # Store
+        console.print("[yellow]💾 Storing episode...[/yellow]")
         episode_id = self.storage.store_episode(episode)
-        
+
         console.print(Panel(
-            f"[bold green]✓ Episodio capturado[/bold green]\n"
+            f"[bold green]✓ Episode captured[/bold green]\n"
             f"ID: {episode_id}\n"
-            f"Tarea: {episode.task[:100]}...\n"
-            f"Tipo: {episode.episode_type.value}\n"
+            f"Task: {episode.task[:100]}...\n"
+            f"Type: {episode.episode_type.value}\n"
             f"Tags: {', '.join(episode.tags[:5])}",
-            title="Memoria Registrada",
+            title="Memory Registered",
             border_style="green"
         ))
-        
+
         return episode
-    
+
     def capture_thinking_sync(
         self,
         thinking_text: str,
@@ -120,7 +120,7 @@ class Escriba:
         source_assistant: str = "unknown",
         project_name: Optional[str] = None
     ) -> Episode:
-        """Versión síncrona de capture_thinking."""
+        """Synchronous version of capture_thinking."""
         import asyncio
         return asyncio.run(
             self.capture_thinking(
@@ -131,7 +131,7 @@ class Escriba:
                 project_name
             )
         )
-    
+
     def capture_from_file(
         self,
         file_path: str,
@@ -139,83 +139,46 @@ class Escriba:
         project_name: Optional[str] = None
     ) -> Episode:
         """
-        Capturar pensamiento desde un archivo de texto.
-        
+        Capture thinking from a text file.
+
         Args:
-            file_path: Ruta al archivo con el texto de thinking
-            source_assistant: Asistente fuente
-            project_name: Nombre del proyecto
-            
+            file_path: Path to the file containing thinking text
+            source_assistant: Source assistant
+            project_name: Project name
+
         Returns:
-            Episode estructurado y almacenado
+            Structured and stored Episode
         """
         with open(file_path, 'r', encoding='utf-8') as f:
             thinking_text = f.read()
-            
+
         return self.capture_thinking_sync(
             thinking_text,
             source_assistant=source_assistant,
             project_name=project_name
         )
-    
-    def capture_from_clipboard(
-        self,
-        source_assistant: str = "unknown",
-        project_name: Optional[str] = None
-    ) -> Episode:
-        """
-        Capturar pensamiento desde el clipboard del sistema.
-        
-        Args:
-            source_assistant: Asistente fuente
-            project_name: Nombre del proyecto
-            
-        Returns:
-            Episode estructurado y almacenado
-        """
-        try:
-            import pyperclip
-            thinking_text = pyperclip.paste()
-            
-            if not thinking_text or len(thinking_text.strip()) < 50:
-                raise ValueError(
-                    "El clipboard está vacío o tiene muy poco contenido. "
-                    "Copia el texto de 'thinking' del asistente primero."
-                )
-                
-            return self.capture_thinking_sync(
-                thinking_text,
-                source_assistant=source_assistant,
-                project_name=project_name
-            )
-            
-        except ImportError:
-            raise ImportError(
-                "Se requiere 'pyperclip' para captura desde clipboard. "
-                "Instálalo con: pip install pyperclip"
-            )
-    
+
     def get_statistics(self) -> dict:
-        """Obtener estadísticas del almacenamiento."""
+        """Get storage statistics."""
         return self.storage.get_statistics(self.project_name)
-    
+
     def search(self, query: str, top_k: int = 5):
         """
-        Buscar en la memoria (wrapper simple).
-        
+        Search memory (simple wrapper).
+
         Args:
-            query: Texto de búsqueda
-            top_k: Número de resultados
-            
+            query: Search text
+            top_k: Number of results
+
         Returns:
-            Lista de resultados de búsqueda
+            List of search results
         """
         from memorytwin.models import MemoryQuery
-        
+
         memory_query = MemoryQuery(
             query=query,
             project_filter=self.project_name,
             top_k=top_k
         )
-        
+
         return self.storage.search_episodes(memory_query)
