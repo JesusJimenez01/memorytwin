@@ -357,7 +357,7 @@ ruff check src/ tests/
 
 ```bash
 # Clone and install in development mode
-git clone https://github.com/your-username/memorytwin.git
+git clone https://github.com/JesusJimenez01/memorytwin.git
 cd memorytwin
 pip install -e ".[dev,ui]"
 
