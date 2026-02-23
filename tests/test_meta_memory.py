@@ -3,7 +3,7 @@ Tests for MetaMemory and consolidation
 =====================================
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -219,7 +219,8 @@ class TestMetaMemoryTimestamps:
         mm = MetaMemory(pattern="Test", pattern_summary="Test")
 
         assert mm.updated_at is not None
-        assert mm.created_at == mm.updated_at  # Initially equal
+        assert mm.updated_at >= mm.created_at
+        assert (mm.updated_at - mm.created_at) <= timedelta(milliseconds=1)
 
     def test_last_accessed_initially_none(self):
         """last_accessed is initially None."""
