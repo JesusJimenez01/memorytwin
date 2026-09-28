@@ -5,20 +5,27 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "memorytwin"
 version = "0.1.0"
-description = "Episodic Memory Agent for Software Development - Dual Escriba + Oráculo Architecture"
+description = "Episodic memory for AI coding assistants: captures the reasoning behind technical decisions and serves it back via RAG and MCP"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
-    {name = "Memory Twin Team"}
+    {name = "Jesús Jiménez Pérez", email = "jesusjp2333@gmail.com"}
 ]
-keywords = ["ai", "memory", "rag", "mcp", "copilot", "development"]
+maintainers = [
+    {name = "Jesús Jiménez Pérez", email = "jesusjp2333@gmail.com"}
+]
+keywords = ["ai", "llm", "memory", "rag", "mcp", "embeddings", "copilot", "developer-tools"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "Programming Language :: Python :: 3.10",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development",
 ]
 
 dependencies = [
@@ -27,7 +34,7 @@ dependencies = [
     "openai>=1.0.0",  # For OpenRouter and other compatible providers
     "chromadb>=0.4.0",
     "sentence-transformers>=2.2.0",
-    "mcp>=1.0.0",
+    "mcp>=1.19,<2",  # 2.x replaced the low-level Server decorator API
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "python-dotenv>=1.0.0",
@@ -44,26 +51,14 @@ ui = [
     "gradio>=4.0.0",
 ]
 
-# Observability
+# Observability (Langfuse SDK with the observation API)
 observability = [
-    "langfuse>=2.0.0",
+    "langfuse>=3.4,<5",
 ]
 
-# SQL database (for scalability)
-sql = [
-    "sqlalchemy>=2.0.0",
-    "aiosqlite>=0.19.0",
-    "alembic>=1.13.0",
-]
-
-# Alternative LLM providers
-anthropic = [
-    "anthropic>=0.30.0",
-]
-
-# All features
+# All optional features
 all = [
-    "memorytwin[ui,observability,sql,anthropic]",
+    "memorytwin[ui,observability]",
 ]
 
 # Development
@@ -71,24 +66,26 @@ dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.0.0",
-    "black>=23.0.0",
     "ruff>=0.1.0",
 ]
 
-[project.scripts]
-# Main command
-mt = "memorytwin.escriba.cli:main"
+[project.urls]
+Homepage = "https://github.com/JesusJimenez01/memorytwin"
+Repository = "https://github.com/JesusJimenez01/memorytwin"
+Issues = "https://github.com/JesusJimenez01/memorytwin/issues"
 
+[project.scripts]
+mt = "memorytwin.escriba.cli:main"
 memorytwin = "memorytwin.escriba.cli:main"
 memorytwin-oraculo = "memorytwin.oraculo.app:main"
 memorytwin-mcp = "memorytwin.mcp_server.server:main"
 
-[tool.black]
-line-length = 120
-target-version = ['py310']
+[tool.setuptools.package-data]
+memorytwin = ["templates/*"]
 
 [tool.ruff]
 line-length = 120
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
@@ -101,10 +98,9 @@ select = ["E", "F", "I", "N", "W"]
 [tool.coverage.run]
 source = ["src/memorytwin"]
 omit = [
-    "src/memorytwin/escriba/cli.py",
+    # Interactive entry points (Gradio UI, terminal chat)
     "src/memorytwin/oraculo/app.py",
-    "src/memorytwin/escriba/project_analyzer.py",
-    "src/memorytwin/observability.py",
+    "src/memorytwin/oraculo/oraculo.py",
 ]
 
 [tool.coverage.report]
@@ -113,7 +109,7 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "raise NotImplementedError",
 ]
-fail_under = 60
+fail_under = 70
 show_missing = true
 
 [tool.pytest.ini_options]
