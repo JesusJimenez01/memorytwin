@@ -6,9 +6,7 @@ Uses an LLM (e.g., Gemini Flash) to convert raw
 "thinking" text into structured memory episodes.
 """
 
-import json
 import logging
-import re
 from typing import Optional
 
 from tenacity import (
@@ -19,9 +17,9 @@ from tenacity import (
     wait_exponential,
 )
 
-from memorytwin.config import get_llm_model, get_settings
+from memorytwin.config import get_llm_model, get_settings, parse_json_response
 from memorytwin.models import Episode, EpisodeType, ProcessedInput, ReasoningTrace
-from memorytwin.observability import _get_langfuse, _is_disabled, flush_traces, trace_store_memory
+from memorytwin.observability import trace_observation, trace_store_memory
 
 logger = logging.getLogger("memorytwin.processor")
 
@@ -109,20 +107,14 @@ class ThoughtProcessor:
         # Build prompt with input
         user_content = self._build_user_prompt(raw_input)
 
-        # Trace LLM generation
-        langfuse = _get_langfuse() if not _is_disabled() else None
-        generation = None
-
-        try:
-            if langfuse:
-                generation = langfuse.start_as_current_generation(
-                    name="Escriba - Structure Thought",
-                    model=settings.llm_model,
-                    model_parameters={"temperature": settings.llm_temperature},
-                    input={"thinking_text": raw_input.raw_text[:500], "project": project_name}
-                ).__enter__()
-
-            # Call the LLM (unified interface)
+        # Call the LLM (unified interface), traced as a generation
+        with trace_observation(
+            "Escriba - Structure Thought",
+            as_type="generation",
+            model=settings.llm_model,
+            model_parameters={"temperature": settings.llm_temperature},
+            input={"thinking_text": raw_input.raw_text[:500], "project": project_name},
+        ) as generation:
             response = await self.model.generate_async(
                 [
                     {"role": "user", "parts": [STRUCTURING_PROMPT]},
@@ -136,29 +128,11 @@ class ThoughtProcessor:
                     {"role": "user", "parts": [user_content]}
                 ]
             )
-
-            if generation:
+            if generation is not None:
                 generation.update(output=response.text[:1000])
 
-        finally:
-            if generation:
-                try:
-                    generation.end()
-                except Exception:
-                    pass
-            if langfuse:
-                flush_traces()
-
-        # Parse JSON response
-        try:
-            structured_data = json.loads(response.text)
-        except json.JSONDecodeError as e:
-            # Try to extract JSON if there's extra text
-            json_match = re.search(r'\{[\s\S]*\}', response.text)
-            if json_match:
-                structured_data = json.loads(json_match.group())
-            else:
-                raise ValueError(f"LLM did not return valid JSON: {e}")
+        # Parse JSON response (tolerates code fences / extra prose)
+        structured_data = parse_json_response(response.text)
 
         # Build Episode
         episode = self._build_episode(

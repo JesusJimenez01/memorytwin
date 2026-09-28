@@ -8,7 +8,8 @@ technology stack, and conventions of an existing project.
 
 import json
 import os
-import sys
+import re
+import tomllib
 from collections import Counter
 from pathlib import Path
 from typing import Optional
@@ -16,15 +17,16 @@ from typing import Optional
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-# Fix encoding on Windows
-if sys.platform == "win32":
-    try:
-        sys.stdout.reconfigure(encoding='utf-8')
-        sys.stderr.reconfigure(encoding='utf-8')
-    except Exception:
-        pass
+# Progress goes to stderr: stdout is reserved for the MCP stdio protocol
+console = Console(stderr=True)
 
-console = Console()
+# Splits a requirement specifier ("pkg[extra]>=1.0; python_version<'3.12'") from its name
+_REQUIREMENT_NAME_RE = re.compile(r"[\s\[<>=!~;@]")
+
+
+def _requirement_name(spec: str) -> str:
+    """Extract the distribution name from a PEP 508 requirement string."""
+    return _REQUIREMENT_NAME_RE.split(spec.strip(), maxsplit=1)[0]
 
 
 # File and directory patterns to ignore
@@ -265,7 +267,6 @@ class ProjectAnalyzer:
         pyproject_path = self.project_path / 'pyproject.toml'
         if pyproject_path.exists():
             try:
-                import tomllib
                 content = pyproject_path.read_text(encoding='utf-8')
                 data = tomllib.loads(content)
                 project_info = data.get('project', data.get('tool', {}).get('poetry', {}))
@@ -307,7 +308,7 @@ class ProjectAnalyzer:
                 for line in content.split('\n'):
                     line = line.strip()
                     if line and not line.startswith('#') and not line.startswith('-'):
-                        pkg = line.split('==')[0].split('>=')[0].split('<=')[0].split('[')[0]
+                        pkg = _requirement_name(line)
                         if pkg:
                             deps['main'].append(pkg)
             except Exception:
@@ -317,12 +318,11 @@ class ProjectAnalyzer:
         pyproject_path = self.project_path / 'pyproject.toml'
         if pyproject_path.exists():
             try:
-                import tomllib
                 content = pyproject_path.read_text(encoding='utf-8')
                 data = tomllib.loads(content)
                 project_deps = data.get('project', {}).get('dependencies', [])
                 for dep in project_deps:
-                    pkg = dep.split('==')[0].split('>=')[0].split('<=')[0].split('[')[0]
+                    pkg = _requirement_name(dep)
                     if pkg and pkg not in deps['main']:
                         deps['main'].append(pkg)
             except Exception:
@@ -339,7 +339,7 @@ class ProjectAnalyzer:
                 pass
 
         return {
-            'main': deps['main'][:20],  # Limitar
+            'main': deps['main'][:20],  # Keep the prompt compact
             'dev': deps['dev'][:10]
         }
 

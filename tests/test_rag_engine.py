@@ -46,7 +46,7 @@ class TestRAGEngine:
             reasoning_trace=ReasoningTrace(
                 raw_thinking="I chose JWT for scalability",
                 alternatives_considered=["Sessions", "OAuth2"],
-                decision_factors=["Stateless", "Escalabilidad"]
+                decision_factors=["Stateless", "Scalability"]
             ),
             solution="from jose import jwt",
             solution_summary="JWT with 24h tokens",
@@ -67,23 +67,43 @@ class TestRAGEngine:
         )
 
     def test_rag_engine_init(self, mock_llm_model, mock_storage):
-        """Test for RAGEngine initialization."""
+        """Test for RAGEngine initialization (LLM client is created lazily)."""
         mock_factory, mock_model = mock_llm_model
 
         engine = RAGEngine(storage=mock_storage)
 
-        # Verify that the factory was called
-        mock_factory.assert_called_once()
+        # The LLM is not needed until an answer has to be generated
+        mock_factory.assert_not_called()
         assert engine.storage == mock_storage
+
         assert engine.model == mock_model
+        assert engine.model == mock_model
+        mock_factory.assert_called_once()
 
-    def test_rag_engine_init_no_api_key_raises(self, mock_storage):
-        """Test that initialization fails without API key in config."""
+    def test_retrieval_works_without_api_key(self, mock_storage):
+        """Timeline/lessons/statistics must not require an LLM API key."""
         with patch("memorytwin.oraculo.rag_engine.get_llm_model") as mock:
-            mock.side_effect = ValueError("GOOGLE_API_KEY is required")
+            mock.side_effect = ValueError("OPENROUTER_API_KEY is required")
+            mock_storage.get_timeline.return_value = []
+            mock_storage.get_lessons_learned.return_value = []
+            mock_storage.get_statistics.return_value = {"total_episodes": 0}
 
-            with pytest.raises(ValueError, match="GOOGLE_API_KEY is required"):
-                RAGEngine(storage=mock_storage)
+            engine = RAGEngine(storage=mock_storage)
+
+            assert engine.get_timeline() == []
+            assert engine.get_lessons() == []
+            assert engine.get_statistics() == {"total_episodes": 0}
+            mock.assert_not_called()
+
+    def test_model_access_without_api_key_raises(self, mock_storage):
+        """Accessing the LLM without API key surfaces the configuration error."""
+        with patch("memorytwin.oraculo.rag_engine.get_llm_model") as mock:
+            mock.side_effect = ValueError("OPENROUTER_API_KEY is required")
+
+            engine = RAGEngine(storage=mock_storage)
+
+            with pytest.raises(ValueError, match="OPENROUTER_API_KEY is required"):
+                _ = engine.model
 
     def test_build_context(self, mock_llm_model, mock_storage, sample_search_result):
         """Test for context construction."""
@@ -157,7 +177,7 @@ class TestRAGEngine:
 
         # Model mock
         mock_response = MagicMock()
-        mock_response.text = "JWT fue elegido por su naturaleza stateless y escalabilidad."
+        mock_response.text = "JWT was chosen because it is stateless and scales well."
         mock_model.generate_async = AsyncMock(return_value=mock_response)
 
         engine = RAGEngine(storage=mock_storage)
@@ -180,6 +200,25 @@ class TestRAGEngine:
         assert query.query == "Why did we use JWT?"
         assert query.project_filter == "test-project"
         assert query.top_k == 3
+
+    @pytest.mark.asyncio
+    async def test_query_falls_back_to_retrieved_memories_when_llm_fails(
+        self, mock_llm_model, mock_storage, sample_search_result
+    ):
+        """If the LLM call fails, the retrieved memories are still returned."""
+        mock_factory, mock_model = mock_llm_model
+
+        mock_storage.search_episodes.return_value = [sample_search_result]
+        mock_storage.search_meta_memories.return_value = []
+        mock_model.generate_async = AsyncMock(side_effect=RuntimeError("rate limited"))
+
+        engine = RAGEngine(storage=mock_storage)
+        result = await engine.query("Why did we use JWT?")
+
+        assert result["context_provided"] is True
+        assert result["llm_generated"] is False
+        assert "Implement JWT authentication" in result["answer"]
+        assert "Validate JWT algorithm" in result["answer"]
 
     def test_query_sync(
         self, mock_llm_model, mock_storage, sample_search_result

@@ -1,11 +1,14 @@
 """
-Observability with Langfuse v3 - Simplified Version
-====================================================
+Observability with Langfuse
+===========================
 
 Only 3 main traces:
 1. Store Memory - LLM Input/Output when structuring thoughts
 2. Access Memories - LLM Input/Output for RAG queries
 3. Consolidate Memories - Consolidated episodes -> MetaMemory created
+
+Uses the observation API of the Langfuse SDK (>= 3.4). Tracing is fully
+optional: without the package or credentials every decorator is a no-op.
 
 Configuration via .env:
   - LANGFUSE_PUBLIC_KEY
@@ -16,20 +19,30 @@ Configuration via .env:
 import logging
 import os
 import sys
+from contextlib import contextmanager
 from functools import wraps
+from typing import Any, Iterator
 
-# Silence noisy Langfuse warnings ("Calling end() on an ended span")
-logging.getLogger("langfuse").setLevel(logging.ERROR)
-
-# Import config first to load .env
-from memorytwin.config import get_settings  # noqa: F401 - ensures .env is loaded
+# Importing config loads .env, so LANGFUSE_* variables are visible below
+from memorytwin.config import get_settings  # noqa: F401
 
 try:
     from langfuse import Langfuse  # type: ignore
 except ImportError:
     Langfuse = None
 
-__all__ = ["trace_store_memory", "trace_access_memory", "trace_consolidation", "flush_traces"]
+# Silence noisy Langfuse warnings ("Calling end() on an ended span")
+logging.getLogger("langfuse").setLevel(logging.ERROR)
+
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "trace_store_memory",
+    "trace_access_memory",
+    "trace_consolidation",
+    "trace_observation",
+    "flush_traces",
+]
 
 # Singleton Langfuse client
 _langfuse_client = None
@@ -54,8 +67,8 @@ def _get_langfuse():
     if _langfuse_client is None and not _is_disabled():
         try:
             _langfuse_client = Langfuse()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Langfuse disabled, client could not be created: %s", e)
     return _langfuse_client
 
 
@@ -65,8 +78,33 @@ def flush_traces():
     if client:
         try:
             client.flush()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Could not flush Langfuse traces: %s", e)
+
+
+@contextmanager
+def trace_observation(name: str, as_type: str = "span", **attributes: Any) -> Iterator[Any]:
+    """
+    Trace a block of code as a Langfuse observation (span, generation...).
+
+    Yields the observation so the caller can attach its output, or None when
+    tracing is disabled, which keeps call sites free of Langfuse checks::
+
+        with trace_observation("Oracle LLM Response", as_type="generation", model=m) as gen:
+            answer = call_llm()
+            if gen is not None:
+                gen.update(output=answer)
+    """
+    client = None if _is_disabled() else _get_langfuse()
+    if client is None:
+        yield None
+        return
+
+    try:
+        with client.start_as_current_observation(as_type=as_type, name=name, **attributes) as observation:
+            yield observation
+    finally:
+        flush_traces()
 
 
 def trace_store_memory(func):
@@ -89,7 +127,8 @@ def trace_store_memory(func):
             return await func(*args, **kwargs)
 
         try:
-            with client.start_as_current_span(
+            with client.start_as_current_observation(
+                as_type="span",
                 name="Store Memory",
                 input={"thinking_text": input_text, "project": project_name},
                 metadata={"project": project_name, "operation": "store"}
@@ -105,7 +144,8 @@ def trace_store_memory(func):
                 return result
         except Exception as e:
             # On error, still create a span to log it
-            with client.start_as_current_span(
+            with client.start_as_current_observation(
+                as_type="span",
                 name="Store Memory - ERROR",
                 input={"thinking_text": input_text},
                 level="ERROR"
@@ -137,7 +177,8 @@ def trace_access_memory(func):
             return await func(*args, **kwargs)
 
         try:
-            with client.start_as_current_span(
+            with client.start_as_current_observation(
+                as_type="span",
                 name="Access Memories",
                 input={"question": question, "project": project_name},
                 metadata={"project": project_name or "all", "operation": "access"}
@@ -151,7 +192,8 @@ def trace_access_memory(func):
                 })
                 return result
         except Exception as e:
-            with client.start_as_current_span(
+            with client.start_as_current_observation(
+                as_type="span",
                 name="Access Memories - ERROR",
                 input={"question": question},
                 level="ERROR"
@@ -188,7 +230,8 @@ def trace_consolidation(func):
             return func(*args, **kwargs)
 
         try:
-            with client.start_as_current_span(
+            with client.start_as_current_observation(
+                as_type="span",
                 name="Consolidate Memories",
                 input={
                     "episodes_count": len(episodes),
@@ -209,7 +252,8 @@ def trace_consolidation(func):
                     })
                 return result
         except Exception as e:
-            with client.start_as_current_span(
+            with client.start_as_current_observation(
+                as_type="span",
                 name="Consolidate Memories - ERROR",
                 input={"episodes_count": len(episodes)},
                 level="ERROR"

@@ -9,12 +9,19 @@ technical decisions.
 Includes support for MetaMemories (consolidated knowledge).
 """
 
+import logging
 from typing import Optional
 
-from memorytwin.config import get_llm_model, get_settings
+from memorytwin.config import BaseLLMClient, get_llm_model, get_settings
 from memorytwin.escriba.storage import MemoryStorage
 from memorytwin.models import MemoryQuery, MemorySearchResult, MetaMemorySearchResult
-from memorytwin.observability import _get_langfuse, _is_disabled, flush_traces, trace_access_memory
+from memorytwin.observability import trace_access_memory, trace_observation
+
+logger = logging.getLogger(__name__)
+
+# Generation parameters for Oracle answers (slightly creative, bounded length)
+ORACLE_TEMPERATURE = 0.4
+ORACLE_MAX_OUTPUT_TOKENS = 2048
 
 # System prompt for the Oráculo
 ORACLE_SYSTEM_PROMPT = (
@@ -65,9 +72,22 @@ class RAGEngine:
             storage: Memory storage instance (creates one if not provided)
         """
         self.storage = storage or MemoryStorage()
+        self._model: Optional[BaseLLMClient] = None
 
-        # Use centralized factory (slightly higher temperature for creative answers)
-        self.model = get_llm_model(temperature=0.4, max_output_tokens=2048)
+    @property
+    def model(self) -> BaseLLMClient:
+        """
+        LLM client, created on first use.
+
+        Retrieval-only operations (timeline, lessons, statistics) never touch
+        the LLM, so they keep working without an API key configured.
+        """
+        if self._model is None:
+            self._model = get_llm_model(
+                temperature=ORACLE_TEMPERATURE,
+                max_output_tokens=ORACLE_MAX_OUTPUT_TOKENS,
+            )
+        return self._model
 
     @trace_access_memory
     async def query(
@@ -127,8 +147,15 @@ class RAGEngine:
         # Build context combining meta-memories and episodes
         context = self._build_combined_context(meta_results, search_results)
 
-        # Generate answer
-        answer = await self._generate_answer(question, context)
+        # Generate answer. Retrieval already succeeded, so if the LLM is down
+        # (no API key, rate limit, outage) we still return what was found.
+        try:
+            answer = await self._generate_answer(question, context)
+            llm_generated = True
+        except Exception as e:
+            logger.warning("LLM unavailable, answering with retrieved memories only: %s", e)
+            answer = self._build_fallback_answer(meta_results, search_results)
+            llm_generated = False
 
         return {
             "answer": answer,
@@ -136,7 +163,8 @@ class RAGEngine:
             "meta_memories_used": [r.meta_memory for r in meta_results],
             "relevance_scores": [r.relevance_score for r in search_results],
             "meta_relevance_scores": [r.relevance_score for r in meta_results],
-            "context_provided": True
+            "context_provided": True,
+            "llm_generated": llm_generated,
         }
 
     def query_sync(
@@ -238,6 +266,34 @@ class RAGEngine:
 
         return "\n".join(context_parts)
 
+    @staticmethod
+    def _build_fallback_answer(
+        meta_results: list[MetaMemorySearchResult],
+        episode_results: list[MemorySearchResult]
+    ) -> str:
+        """Markdown digest of the retrieved memories, used when no LLM answer is available."""
+        lines = [
+            "_The language model is unavailable, so here are the most relevant memories "
+            "found for your question:_",
+            "",
+        ]
+
+        for result in meta_results:
+            mm = result.meta_memory
+            lines.append(f"- **Pattern** ({result.relevance_score:.0%}): {mm.pattern_summary}")
+            lines.extend(f"  - Lesson: {lesson}" for lesson in mm.lessons[:3])
+
+        for result in episode_results:
+            ep = result.episode
+            prefix = "⚠️ **Antipattern** " if ep.is_antipattern else ""
+            lines.append(
+                f"- {prefix}**{ep.task}** ({result.relevance_score:.0%}, "
+                f"{ep.timestamp.strftime('%Y-%m-%d')}): {ep.solution_summary}"
+            )
+            lines.extend(f"  - Lesson: {lesson}" for lesson in ep.lessons_learned[:2])
+
+        return "\n".join(lines)
+
     async def _generate_answer(self, question: str, context: str) -> str:
         """Generate an answer using the LLM with observability."""
         prompt = f"""## MEMORY CONTEXT
@@ -249,20 +305,16 @@ class RAGEngine:
 ## YOUR ANSWER (using Markdown)
 """
 
-        # Trace LLM generation
-        langfuse = _get_langfuse() if not _is_disabled() else None
-        generation = None
-
-        try:
-            if langfuse:
-                generation = langfuse.start_as_current_generation(
-                    name="Oracle LLM Response",
-                    model=get_settings().llm_model,
-                    model_parameters={"temperature": 0.4, "max_output_tokens": 2048},
-                    input={"question": question, "context_length": len(context)}
-                ).__enter__()
-
-            # Call the LLM (unified interface)
+        with trace_observation(
+            "Oracle LLM Response",
+            as_type="generation",
+            model=get_settings().llm_model,
+            model_parameters={
+                "temperature": ORACLE_TEMPERATURE,
+                "max_output_tokens": ORACLE_MAX_OUTPUT_TOKENS,
+            },
+            input={"question": question, "context_length": len(context)},
+        ) as generation:
             response = await self.model.generate_async(
                 [
                     {"role": "user", "parts": [ORACLE_SYSTEM_PROMPT]},
@@ -273,22 +325,10 @@ class RAGEngine:
                     {"role": "user", "parts": [prompt]}
                 ]
             )
+            if generation is not None:
+                generation.update(output=response.text[:1000])  # Limit output to avoid saturation
 
-            answer = response.text
-
-            if generation:
-                generation.update(output=answer[:1000])  # Limit output to avoid saturation
-
-            return answer
-
-        finally:
-            if generation:
-                try:
-                    generation.end()
-                except Exception:
-                    pass
-            if langfuse:
-                flush_traces()
+        return response.text
 
     def get_timeline(
         self,

@@ -5,6 +5,7 @@ Tests for the storage module
 
 import tempfile
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -44,8 +45,8 @@ def sample_episode():
             raw_thinking="The user needs authentication. I considered various options: "
                         "sessions with Redis (discarded due to infrastructure), "
                         "OAuth2 (too complex), JWT (chosen for simplicity).",
-            alternatives_considered=["Sessions con Redis", "OAuth2 completo"],
-            decision_factors=["Stateless", "Escalabilidad", "Simplicidad"],
+            alternatives_considered=["Sessions with Redis", "Full OAuth2"],
+            decision_factors=["Stateless", "Scalability", "Simplicity"],
             confidence_level=0.9
         ),
         solution="from jose import jwt\n\ndef create_token(user_id): ...",
@@ -107,7 +108,7 @@ class TestMemoryStorage:
         assert len(episodes) == 1
 
         # Search by incorrect project
-        episodes = temp_storage.get_episodes_by_project("otro-proyecto")
+        episodes = temp_storage.get_episodes_by_project("other-project")
         assert len(episodes) == 0
 
     def test_get_timeline(self, temp_storage, sample_episode):
@@ -176,6 +177,71 @@ class TestMemoryStorage:
         # Try deleting again (should fail)
         success = temp_storage.delete_episode(episode_id)
         assert success is False
+
+    def test_flags_are_persisted_on_store(self, temp_storage, sample_episode):
+        """is_critical / is_antipattern / superseded_by survive a round trip."""
+        replacement_id = uuid4()
+        flagged = sample_episode.model_copy(update={
+            "is_critical": True,
+            "is_antipattern": True,
+            "superseded_by": replacement_id,
+            "deprecation_reason": "Replaced by OAuth2 flow",
+        })
+
+        episode_id = temp_storage.store_episode(flagged)
+        retrieved = temp_storage.get_episode_by_id(episode_id)
+
+        assert retrieved.is_critical is True
+        assert retrieved.is_antipattern is True
+        assert retrieved.superseded_by == replacement_id
+        assert retrieved.deprecation_reason == "Replaced by OAuth2 flow"
+
+    def test_update_episode_flags(self, temp_storage, sample_episode):
+        """Flags can be set and cleared after storing."""
+        episode_id = temp_storage.store_episode(sample_episode)
+
+        assert temp_storage.update_episode_flags(episode_id, {"is_antipattern": True})
+        assert temp_storage.get_episode_by_id(episode_id).is_antipattern is True
+
+        assert temp_storage.update_episode_flags(episode_id, {"is_antipattern": False})
+        assert temp_storage.get_episode_by_id(episode_id).is_antipattern is False
+
+        assert temp_storage.update_episode_flags(str(uuid4()), {"is_critical": True}) is False
+
+    def test_update_episode_flags_ignores_unknown_fields(self, temp_storage, sample_episode):
+        """Only whitelisted fields can be modified."""
+        episode_id = temp_storage.store_episode(sample_episode)
+
+        temp_storage.update_episode_flags(episode_id, {"task": "hijacked", "is_critical": True})
+        retrieved = temp_storage.get_episode_by_id(episode_id)
+
+        assert retrieved.task == sample_episode.task
+        assert retrieved.is_critical is True
+
+    def test_statistics_filtered_by_project(self, temp_storage, sample_episode):
+        """Per-project statistics only count that project's episodes."""
+        temp_storage.store_episode(sample_episode)
+        temp_storage.store_episode(Episode(
+            task="Other task",
+            context="Other context",
+            reasoning_trace=ReasoningTrace(raw_thinking="Other thinking"),
+            solution="",
+            solution_summary="",
+            episode_type=EpisodeType.BUG_FIX,
+            source_assistant="claude",
+            project_name="other-project"
+        ))
+
+        stats = temp_storage.get_statistics("test-api")
+
+        assert stats["total_episodes"] == 1
+        assert stats["by_type"]["feature"] == 1
+        assert stats["by_type"]["bug_fix"] == 0
+        assert stats["by_assistant"] == {"copilot": 1}
+
+        global_stats = temp_storage.get_statistics()
+        assert global_stats["total_episodes"] == 2
+        assert global_stats["by_assistant"] == {"copilot": 1, "claude": 1}
 
 
 if __name__ == "__main__":
