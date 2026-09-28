@@ -91,7 +91,6 @@ target-version = "py311"
 select = ["E", "F", "I", "N", "W"]
 
 [tool.ruff.lint.per-file-ignores]
-"src/memorytwin/mcp_server/server.py" = ["E402"]
 "src/memorytwin/escriba/cli.py" = ["E402", "E501"]
 
 [tool.coverage.run]
