@@ -141,7 +141,9 @@ class RAGEngine:
                 "episodes_used": [],
                 "meta_memories_used": [],
                 "relevance_scores": [],
-                "context_provided": False
+                "meta_relevance_scores": [],
+                "context_provided": False,
+                "llm_generated": False,
             }
 
         # Build context combining meta-memories and episodes

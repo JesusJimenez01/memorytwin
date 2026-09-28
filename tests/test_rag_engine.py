@@ -165,6 +165,8 @@ class TestRAGEngine:
         assert result["episodes_used"] == []
         assert result["meta_memories_used"] == []
         assert result["context_provided"] is False
+        assert result["llm_generated"] is False
+        mock_llm_model[0].assert_not_called()
 
     @pytest.mark.asyncio
     async def test_query_with_results(

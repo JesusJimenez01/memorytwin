@@ -523,7 +523,9 @@ class MemoryStorage:
 
             session.commit()
 
-            # Keep ChromaDB metadata in sync with the current flag values
+            # Keep ChromaDB metadata in sync with the current flag values.
+            # Chroma merges metadata on update (keys not sent are kept), so the
+            # project/type metadata used by search filters is preserved.
             if 'is_antipattern' in updates or 'is_critical' in updates:
                 try:
                     self.collection.update(

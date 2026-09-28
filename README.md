@@ -240,8 +240,10 @@ All settings are read from environment variables or a `.env` file in the working
 | `GRADIO_SERVER_PORT` | `7860` | Web UI port |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST` | | Enable tracing (optional) |
 
-Memories are stored **locally, per project**, in `data/` next to where `mt` runs. Nothing leaves
-your machine except the text sent to the LLM provider you configure.
+Memories are stored **locally, per project**, in `data/` next to where `mt` runs. Data only leaves
+your machine through the services you configure: captured text and questions are sent to your LLM
+provider, and, if Langfuse is enabled, traces with excerpts of inputs and outputs are sent to your
+Langfuse host. Embeddings are computed locally and ChromaDB telemetry is disabled.
 
 ## Observability
 

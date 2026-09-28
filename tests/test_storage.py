@@ -208,6 +208,20 @@ class TestMemoryStorage:
 
         assert temp_storage.update_episode_flags(str(uuid4()), {"is_critical": True}) is False
 
+    def test_flag_update_preserves_vector_metadata(self, temp_storage, sample_episode):
+        """Updating flags must not drop the metadata that search filters rely on."""
+        episode_id = temp_storage.store_episode(sample_episode)
+
+        temp_storage.update_episode_flags(episode_id, {"is_critical": True})
+
+        metadata = temp_storage.collection.get(ids=[episode_id])["metadatas"][0]
+        assert metadata["project_name"] == "test-api"
+        assert metadata["episode_type"] == "feature"
+        assert metadata["is_critical"] is True
+
+        results = temp_storage.search_episodes(MemoryQuery(query="JWT", project_filter="test-api"))
+        assert [str(r.episode.id) for r in results] == [episode_id]
+
     def test_update_episode_flags_ignores_unknown_fields(self, temp_storage, sample_episode):
         """Only whitelisted fields can be modified."""
         episode_id = temp_storage.store_episode(sample_episode)
