@@ -631,7 +631,7 @@ class TestMCPServerCaptureQuick:
             task="Added retry logic",
             context="",
             reasoning_trace=ReasoningTrace(raw_thinking="test"),
-            solution="Retry con exponential backoff",
+            solution="Retry with exponential backoff",
             solution_summary="Retry was added",
             episode_type=EpisodeType.BUG_FIX,
             tags=["http", "retry"],
@@ -777,7 +777,7 @@ class TestMCPServerQueryMemory:
 
         mock_rag = MagicMock()
         mock_rag.query = AsyncMock(return_value={
-            "answer": "JWT fue elegido por escalabilidad",
+            "answer": "JWT was chosen for scalability",
             "episodes_used": [],
             "context_provided": True
         })
@@ -837,7 +837,7 @@ class TestMCPServerProjectContext:
 
         assert result.isError is False
         content = result.content[0].text
-        assert "empty" in content or "no hay" in content.lower()
+        assert "empty" in content
 
     @patch("memorytwin.mcp_server.server.Server")
     @patch("memorytwin.mcp_server.server.ThoughtProcessor")
@@ -977,3 +977,215 @@ class TestMCPServerErrorHandling:
 
         assert result.isError is True
         assert "episode_id" in result.content[0].text.lower()
+
+
+class TestMCPServerToolRegistry:
+    """The advertised tool schemas and the dispatch table must stay in sync."""
+
+    @patch("memorytwin.mcp_server.server.Server")
+    def test_every_tool_has_a_handler(self, mock_server_class):
+        from memorytwin.mcp_server.server import MemoryTwinMCPServer
+        from memorytwin.mcp_server.tools import TOOLS
+
+        mcp_server = MemoryTwinMCPServer()
+
+        tool_names = {tool.name for tool in TOOLS}
+        assert len(tool_names) == len(TOOLS), "Duplicated tool names"
+        assert tool_names == set(mcp_server._handlers())
+
+    def test_required_fields_are_declared_properties(self):
+        from memorytwin.mcp_server.tools import TOOLS
+
+        for tool in TOOLS:
+            properties = tool.inputSchema.get("properties", {})
+            for field in tool.inputSchema.get("required", []):
+                assert field in properties, f"{tool.name}: '{field}' is required but not declared"
+
+
+def _make_server(mock_storage, mock_rag=None, processor=None):
+    """Build a server with injected collaborators (no real storage/LLM)."""
+    from memorytwin.mcp_server.server import MemoryTwinMCPServer
+
+    with patch("memorytwin.mcp_server.server.Server"):
+        server = MemoryTwinMCPServer()
+    server.storage = mock_storage
+    server.rag_engine = mock_rag or MagicMock()
+    server.processor = processor
+    return server
+
+
+class TestMCPServerResilience:
+    """Behaviour when the LLM is not configured or inputs are invalid."""
+
+    @pytest.mark.asyncio
+    async def test_capture_without_llm_stores_raw_episode(self):
+        """With no LLM processor, captures are still stored (unstructured)."""
+        import json
+
+        storage = MagicMock()
+        storage.store_episode.return_value = "raw-id"
+        server = _make_server(storage, processor=None)
+
+        result = await server._capture_quick({"what": "Added cache", "why": "Slow queries", "project_name": "p"})
+
+        assert result.isError is False
+        payload = json.loads(result.content[0].text)
+        assert payload["episode_id"] == "raw-id"
+        assert payload["structured_by_llm"] is False
+        stored_episode = storage.store_episode.call_args.args[0]
+        assert stored_episode.task == "Added cache"
+
+    @patch("memorytwin.mcp_server.server.ThoughtProcessor", side_effect=ValueError("OPENROUTER_API_KEY is required"))
+    @patch("memorytwin.mcp_server.server.MemoryStorage")
+    @patch("memorytwin.mcp_server.server.RAGEngine")
+    @patch("memorytwin.mcp_server.server.Server")
+    def test_lazy_init_tolerates_missing_llm(self, mock_server, mock_rag, mock_storage, mock_processor):
+        from memorytwin.mcp_server.server import MemoryTwinMCPServer
+
+        server = MemoryTwinMCPServer()
+        server._lazy_init()
+
+        assert server.processor is None
+        assert server.storage is not None
+        assert server.rag_engine is not None
+
+    @pytest.mark.asyncio
+    async def test_mark_episode_rejects_invalid_superseded_by(self):
+        storage = MagicMock()
+        storage.get_episode_by_id.return_value = MagicMock(task="t")
+        server = _make_server(storage)
+
+        result = await server._mark_episode({"episode_id": str(uuid4()), "superseded_by": "not-a-uuid"})
+
+        assert result.isError is True
+        assert "superseded_by" in result.content[0].text
+        storage.update_episode_flags.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mark_episode_can_clear_a_flag(self):
+        import json
+
+        storage = MagicMock()
+        storage.get_episode_by_id.return_value = MagicMock(task="t")
+        storage.update_episode_flags.return_value = True
+        server = _make_server(storage)
+        episode_id = str(uuid4())
+
+        result = await server._mark_episode({"episode_id": episode_id, "is_antipattern": False})
+
+        assert result.isError is False
+        storage.update_episode_flags.assert_called_once_with(episode_id, {"is_antipattern": False})
+        assert json.loads(result.content[0].text)["message"] == "Episode updated."
+
+    @pytest.mark.asyncio
+    async def test_mark_episode_without_changes_is_an_error(self):
+        storage = MagicMock()
+        storage.get_episode_by_id.return_value = MagicMock(task="t")
+        server = _make_server(storage)
+
+        result = await server._mark_episode({"episode_id": str(uuid4())})
+
+        assert result.isError is True
+
+    @pytest.mark.asyncio
+    async def test_get_episode_exposes_flags(self):
+        import json
+
+        episode = Episode(
+            task="Use pickle for Redis cache",
+            context="ctx",
+            reasoning_trace=ReasoningTrace(raw_thinking="..."),
+            solution="",
+            solution_summary="",
+            is_antipattern=True,
+            deprecation_reason="Breaks across Python versions",
+        )
+        storage = MagicMock()
+        storage.get_episode_by_id.return_value = episode
+        server = _make_server(storage)
+
+        result = await server._get_episode({"episode_id": str(episode.id)})
+        payload = json.loads(result.content[0].text)
+
+        assert payload["is_antipattern"] is True
+        assert payload["is_critical"] is False
+        assert payload["deprecation_reason"] == "Breaks across Python versions"
+
+
+class TestMCPServerProjectContextRetrieval:
+    """get_project_context retrieval details."""
+
+    @pytest.mark.asyncio
+    async def test_topic_search_runs_once_and_feeds_warnings(self):
+        """A single search provides both warnings and relevant episodes (one access bump each)."""
+        import json
+
+        antipattern = Episode(
+            task="Pickle in Redis",
+            context="ctx",
+            reasoning_trace=ReasoningTrace(raw_thinking="..."),
+            solution="",
+            solution_summary="Do not pickle",
+            lessons_learned=["Use JSON serialization"],
+            is_antipattern=True,
+        )
+        storage = MagicMock()
+        storage.get_meta_memory_statistics.return_value = {"total_meta_memories": 0}
+        storage.check_consolidation_needed.return_value = {"should_consolidate": False}
+        storage.search_episodes.return_value = [MemorySearchResult(episode=antipattern, relevance_score=0.8)]
+        rag = MagicMock()
+        rag.get_statistics.return_value = {"total_episodes": 50}
+        rag.get_timeline.return_value = []
+        rag.get_lessons.return_value = []
+        server = _make_server(storage, rag)
+
+        result = await server._get_project_context({"topic": "redis cache", "project_name": "api"})
+        payload = json.loads(result.content[0].text)
+
+        storage.search_episodes.assert_called_once()
+        rag.get_statistics.assert_called_once_with("api")
+        assert payload["mode"] == "smart_context"
+        assert payload["WARNINGS"][0]["lesson"] == "Use JSON serialization"
+        assert payload["relevant_episodes"][0]["task"] == "Pickle in Redis"
+
+
+class TestMCPServerConsolidation:
+    """consolidate_memories tool."""
+
+    @pytest.mark.asyncio
+    async def test_force_flag_is_forwarded(self):
+        import json
+
+        storage = MagicMock()
+        storage.get_statistics.return_value = {"total_episodes": 10}
+        server = _make_server(storage)
+        meta = MagicMock(
+            id=uuid4(), pattern_summary="p", lessons=[], best_practices=[],
+            episode_count=4, confidence=0.9, technologies=[]
+        )
+
+        with patch("memorytwin.mcp_server.server.MemoryConsolidator") as consolidator_cls:
+            consolidator_cls.return_value.consolidate_project.return_value = [meta]
+            result = await server._consolidate_memories({"project_name": "api", "force": True})
+
+        consolidator_cls.return_value.consolidate_project.assert_called_once_with("api", True)
+        assert json.loads(result.content[0].text)["meta_memories_generated"] == 1
+
+    @pytest.mark.asyncio
+    async def test_timeout_returns_promptly(self):
+        """A slow consolidation must not block the event loop past the timeout."""
+        import time
+
+        storage = MagicMock()
+        storage.get_statistics.return_value = {"total_episodes": 10}
+        server = _make_server(storage)
+
+        with patch("memorytwin.mcp_server.server.MemoryConsolidator") as consolidator_cls, \
+                patch("memorytwin.mcp_server.server.CONSOLIDATION_TIMEOUT_SECONDS", 0.2):
+            consolidator_cls.return_value.consolidate_project.side_effect = lambda *a: time.sleep(1.5)
+            start = time.monotonic()
+            result = await server._consolidate_memories({"project_name": "api"})
+            elapsed = time.monotonic() - start
+
+        assert result.isError is True
+        assert elapsed < 1.0

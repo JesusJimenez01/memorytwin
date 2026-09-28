@@ -11,9 +11,11 @@ querying technical memories from any compatible client
 # The warning occurs when running `python -m memorytwin.mcp_server.server`
 # because __init__.py executes before server.py
 
+
 def get_server():
     """Get MCP server instance (lazy import)."""
     from memorytwin.mcp_server.server import MemoryTwinMCPServer
     return MemoryTwinMCPServer
+
 
 __all__ = ["get_server"]

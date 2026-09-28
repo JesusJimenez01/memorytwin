@@ -371,6 +371,3 @@ class MetaMemorySearchResult(BaseModel):
         default="",
         description="Explanation of why this result is relevant"
     )
-
-
-

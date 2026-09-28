@@ -8,6 +8,7 @@ Manages dual storage:
 """
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -25,6 +26,7 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    func,
 )
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
@@ -38,7 +40,14 @@ from memorytwin.models import (
     MetaMemorySearchResult,
     ReasoningTrace,
 )
-from memorytwin.scoring import compute_hybrid_score
+from memorytwin.scoring import (
+    CONSOLIDATION_ACCESS_THRESHOLD,
+    CONSOLIDATION_EPISODE_THRESHOLD,
+    compute_hybrid_score,
+    should_trigger_consolidation,
+)
+
+logger = logging.getLogger(__name__)
 
 Base = declarative_base()
 
@@ -280,7 +289,12 @@ class MemoryStorage:
                 # Forgetting Curve fields
                 importance_score=episode.importance_score,
                 access_count=episode.access_count,
-                last_accessed=episode.last_accessed
+                last_accessed=episode.last_accessed,
+                # Active memory flags
+                is_antipattern=episode.is_antipattern,
+                is_critical=episode.is_critical,
+                superseded_by=str(episode.superseded_by) if episode.superseded_by else None,
+                deprecation_reason=episode.deprecation_reason,
             )
             session.add(record)
             session.commit()
@@ -297,9 +311,9 @@ class MemoryStorage:
 
         Implements hybrid scoring that combines:
         - Semantic similarity (embeddings)
-        - Temporal decay (forgetting curve)
-        - Boost from frequent access
+        - Boost from frequent access (reinforcement)
         - Base importance of the episode
+        - Critical / antipattern modifiers
 
         Args:
             query: Search query
@@ -338,9 +352,10 @@ class MemoryStorage:
                 # Retrieve full episode from SQLite
                 episode = self.get_episode_by_id(episode_id)
                 if episode:
-                    # Calculate base semantic score (ChromaDB uses L2 distance)
+                    # ChromaDB returns squared L2 distance; for unit-norm embeddings
+                    # d = 2 - 2*cos, so 1 - d/2 recovers the cosine similarity
                     distance = results["distances"][0][i] if results["distances"] else 0
-                    semantic_score = max(0, 1 - distance / 2)  # Normalize
+                    semantic_score = max(0, 1 - distance / 2)
 
                     # Apply hybrid scoring if enabled
                     if use_hybrid_scoring:
@@ -386,8 +401,6 @@ class MemoryStorage:
             - updated: True if successfully updated
             - needs_consolidation: True if consolidation is recommended
         """
-        from memorytwin.scoring import CONSOLIDATION_ACCESS_THRESHOLD
-
         with self._get_session() as session:
             record = session.query(EpisodeRecord).filter(
                 EpisodeRecord.id == episode_id
@@ -422,12 +435,6 @@ class MemoryStorage:
         Returns:
             Dict with recommendation and statistics
         """
-        from memorytwin.scoring import (
-            CONSOLIDATION_ACCESS_THRESHOLD,
-            CONSOLIDATION_EPISODE_THRESHOLD,
-            should_trigger_consolidation,
-        )
-
         with self._get_session() as session:
             query = session.query(EpisodeRecord)
 
@@ -449,16 +456,11 @@ class MemoryStorage:
             total_meta_memories = meta_query.count()
 
             # Estimate consolidated episodes
-            total_consolidated = 0
-            if total_meta_memories > 0:
-                metas = meta_query.all()
-                for meta in metas:
-                    total_consolidated += meta.episode_count
-
+            total_consolidated = sum(meta.episode_count for meta in meta_query.all())
             unconsolidated = max(0, total_episodes - total_consolidated)
 
             # Determine whether to consolidate
-            max_access = max([ep.access_count for ep in hot_episodes], default=0) if hot_episodes else 0
+            max_access = max((ep.access_count for ep in hot_episodes), default=0)
             should_consolidate = should_trigger_consolidation(max_access, unconsolidated)
 
             return {
@@ -516,23 +518,26 @@ class MemoryStorage:
                 'deprecation_reason', 'importance_score',
             }
             for field, value in updates.items():
-                if field in allowed_fields and hasattr(record, field):
+                if field in allowed_fields:
                     setattr(record, field, value)
 
             session.commit()
 
-            # Also update ChromaDB metadata if antipattern
-            if updates.get('is_antipattern') or updates.get('is_critical'):
+            # Keep ChromaDB metadata in sync with the current flag values.
+            # Chroma merges metadata on update (keys not sent are kept), so the
+            # project/type metadata used by search filters is preserved.
+            if 'is_antipattern' in updates or 'is_critical' in updates:
                 try:
                     self.collection.update(
                         ids=[episode_id],
                         metadatas=[{
-                            "is_antipattern": str(updates.get('is_antipattern', False)),
-                            "is_critical": str(updates.get('is_critical', False))
+                            "is_antipattern": bool(record.is_antipattern),
+                            "is_critical": bool(record.is_critical),
                         }]
                     )
-                except Exception:
-                    pass  # Not critical if ChromaDB fails
+                except Exception as e:
+                    # SQLite is the source of truth; vector metadata is best-effort
+                    logger.warning("Could not sync flags to ChromaDB for %s: %s", episode_id, e)
 
             return True
 
@@ -547,11 +552,11 @@ class MemoryStorage:
             True if successfully deleted, False if it didn't exist
         """
         try:
-            # Delete from ChromaDB
+            # Delete from ChromaDB (the vector may not exist)
             try:
                 self.collection.delete(ids=[episode_id])
-            except Exception:
-                pass  # May not exist in ChromaDB
+            except Exception as e:
+                logger.debug("Episode %s not deleted from ChromaDB: %s", episode_id, e)
 
             # Delete from SQLite
             with self._get_session() as session:
@@ -562,7 +567,7 @@ class MemoryStorage:
                     return True
                 return False
         except Exception as e:
-            print(f"Error deleting episode {episode_id}: {e}")
+            logger.error("Error deleting episode %s: %s", episode_id, e)
             return False
 
     def get_episodes_by_project(
@@ -658,28 +663,19 @@ class MemoryStorage:
 
             total = query.count()
 
-            # Count by type
-            type_counts = {}
-            for episode_type in EpisodeType:
-                count = query.filter(
-                    EpisodeRecord.episode_type == episode_type.value
-                ).count()
-                type_counts[episode_type.value] = count
+            # Count by type (every type is reported, even with 0 episodes)
+            type_counts = {episode_type.value: 0 for episode_type in EpisodeType}
+            type_query = session.query(EpisodeRecord.episode_type, func.count(EpisodeRecord.id))
+            if project_name:
+                type_query = type_query.filter(EpisodeRecord.project_name == project_name)
+            for episode_type, count in type_query.group_by(EpisodeRecord.episode_type):
+                type_counts[episode_type] = count
 
-            # Count by assistant (get unique values first)
-            assistant_counts = {}
-            assistants = session.query(EpisodeRecord.source_assistant).distinct().all()
-            for (assistant,) in assistants:
-                if project_name:
-                    count = session.query(EpisodeRecord).filter(
-                        EpisodeRecord.project_name == project_name,
-                        EpisodeRecord.source_assistant == assistant
-                    ).count()
-                else:
-                    count = session.query(EpisodeRecord).filter(
-                        EpisodeRecord.source_assistant == assistant
-                    ).count()
-                assistant_counts[assistant] = count
+            # Count by assistant
+            assistant_query = session.query(EpisodeRecord.source_assistant, func.count(EpisodeRecord.id))
+            if project_name:
+                assistant_query = assistant_query.filter(EpisodeRecord.project_name == project_name)
+            assistant_counts = dict(assistant_query.group_by(EpisodeRecord.source_assistant).all())
 
             return {
                 "total_episodes": total,
@@ -712,11 +708,11 @@ class MemoryStorage:
             importance_score=record.importance_score if record.importance_score is not None else 1.0,
             access_count=record.access_count if record.access_count is not None else 0,
             last_accessed=record.last_accessed,
-            # Active memory fields (with defaults for compatibility)
-            is_antipattern=getattr(record, 'is_antipattern', False) or False,
-            is_critical=getattr(record, 'is_critical', False) or False,
-            superseded_by=UUID(record.superseded_by) if getattr(record, 'superseded_by', None) else None,
-            deprecation_reason=getattr(record, 'deprecation_reason', None)
+            # Active memory fields (NULL-safe for rows created before these columns existed)
+            is_antipattern=bool(record.is_antipattern),
+            is_critical=bool(record.is_critical),
+            superseded_by=UUID(record.superseded_by) if record.superseded_by else None,
+            deprecation_reason=record.deprecation_reason,
         )
 
     # =========================================================================

@@ -12,7 +12,6 @@ Process:
 3. Generates a MetaMemory with patterns, lessons, and exceptions
 """
 
-import json
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -21,7 +20,7 @@ from uuid import uuid4
 import numpy as np
 from sklearn.cluster import DBSCAN
 
-from memorytwin.config import get_llm_model
+from memorytwin.config import get_llm_model, parse_json_response
 from memorytwin.escriba.storage import MemoryStorage
 from memorytwin.models import Episode, MetaMemory
 from memorytwin.observability import trace_consolidation
@@ -107,19 +106,26 @@ class MemoryConsolidator:
         Returns:
             List of generated meta-memories
         """
-        logger.info(f"Starting consolidation for project: {project_name}")
+        logger.info("Starting consolidation for project: %s", project_name)
 
         # Get project episodes
         episodes = self.storage.get_episodes_by_project(project_name, limit=200)
-        logger.info(f"Found {len(episodes)} episodes")
+        logger.info("Found %d episodes", len(episodes))
+
+        # Skip episodes that already feed a meta-memory, so repeated runs
+        # don't produce duplicate meta-memories for the same cluster
+        if not force:
+            consolidated_ids = self._get_consolidated_episode_ids(project_name)
+            episodes = [ep for ep in episodes if ep.id not in consolidated_ids]
+            logger.info("%d episodes pending consolidation", len(episodes))
 
         if len(episodes) < self.min_cluster_size:
-            logger.info(f"Insufficient episodes ({len(episodes)} < {self.min_cluster_size})")
+            logger.info("Insufficient episodes (%d < %d)", len(episodes), self.min_cluster_size)
             return []
 
         # Get embeddings from ChromaDB
         embeddings, episode_ids = self._get_episode_embeddings(episodes)
-        logger.info(f"Retrieved {len(embeddings)} embeddings")
+        logger.info("Retrieved %d embeddings", len(embeddings))
 
         if len(embeddings) < self.min_cluster_size:
             logger.info("Insufficient embeddings")
@@ -127,18 +133,16 @@ class MemoryConsolidator:
 
         # Clustering
         clusters = self._cluster_episodes(embeddings, episode_ids)
-        logger.info(f"Generated {len(clusters)} clusters")
+        logger.info("Generated %d clusters", len(clusters))
 
         # Generate meta-memories for each cluster
         meta_memories = []
-        for i, cluster_episode_ids in enumerate(clusters):
-            logger.info(f"Processing cluster {i+1}/{len(clusters)} ({len(cluster_episode_ids)} episodes)")
+        for i, cluster_episode_ids in enumerate(clusters, 1):
+            logger.info("Processing cluster %d/%d (%d episodes)", i, len(clusters), len(cluster_episode_ids))
 
             # Get cluster episodes
-            cluster_episodes = [
-                ep for ep in episodes
-                if str(ep.id) in cluster_episode_ids
-            ]
+            cluster_ids = set(cluster_episode_ids)
+            cluster_episodes = [ep for ep in episodes if str(ep.id) in cluster_ids]
 
             # Limit episodes per cluster to avoid huge prompts
             if len(cluster_episodes) > self.max_episodes_per_cluster:
@@ -148,22 +152,26 @@ class MemoryConsolidator:
                     key=lambda e: e.timestamp,
                     reverse=True
                 )[:self.max_episodes_per_cluster]
-                logger.info(f"Cluster limited to {self.max_episodes_per_cluster} most recent episodes")
+                logger.info("Cluster limited to %d most recent episodes", self.max_episodes_per_cluster)
 
             if len(cluster_episodes) >= self.min_cluster_size:
-                logger.info(f"Synthesizing cluster {i+1} with LLM...")
+                logger.info("Synthesizing cluster %d with LLM...", i)
                 meta_memory = self._synthesize_cluster(
                     cluster_episodes,
                     project_name
                 )
                 if meta_memory:
-                    # Store
                     self.storage.store_meta_memory(meta_memory)
                     meta_memories.append(meta_memory)
-                    logger.info(f"Meta-memory {i+1} created: {meta_memory.pattern_summary[:50]}...")
+                    logger.info("Meta-memory %d created: %s", i, meta_memory.pattern_summary[:50])
 
-        logger.info(f"Consolidation completed: {len(meta_memories)} meta-memories generated")
+        logger.info("Consolidation completed: %d meta-memories generated", len(meta_memories))
         return meta_memories
+
+    def _get_consolidated_episode_ids(self, project_name: str) -> set:
+        """IDs of the episodes already summarized by an existing meta-memory."""
+        existing = self.storage.get_meta_memories_by_project(project_name, limit=1000)
+        return {episode_id for meta in existing for episode_id in meta.source_episode_ids}
 
     def _get_episode_embeddings(
         self,
@@ -211,13 +219,11 @@ class MemoryConsolidator:
         ).fit(normalized)
 
         # Group IDs by cluster label
-        clusters = {}
+        clusters: dict[int, list[str]] = {}
         for idx, label in enumerate(clustering.labels_):
             if label == -1:  # Outlier
                 continue
-            if label not in clusters:
-                clusters[label] = []
-            clusters[label].append(episode_ids[idx])
+            clusters.setdefault(label, []).append(episode_ids[idx])
 
         return list(clusters.values())
 
@@ -247,19 +253,7 @@ class MemoryConsolidator:
         try:
             # Call the LLM (unified interface)
             response = self.model.generate(prompt)
-
-            # Parse JSON response
-            response_text = response.text.strip()
-
-            # Clean possible code markers
-            if response_text.startswith("```json"):
-                response_text = response_text[7:]
-            if response_text.startswith("```"):
-                response_text = response_text[3:]
-            if response_text.endswith("```"):
-                response_text = response_text[:-3]
-
-            data = json.loads(response_text.strip())
+            data = parse_json_response(response.text)
 
             # Calculate confidence based on number of episodes
             # More episodes = higher confidence (up to a point)
@@ -283,19 +277,27 @@ class MemoryConsolidator:
                 source_episode_ids=[ep.id for ep in episodes],
                 episode_count=len(episodes),
                 confidence=confidence,
-                coherence_score=data.get("coherence_score", 0.5),
+                coherence_score=self._clamp_score(data.get("coherence_score", 0.5)),
                 project_name=project_name,
                 tags=self._extract_common_tags(episodes)
             )
 
             return meta_memory
 
-        except json.JSONDecodeError as e:
-            print(f"Error parsing LLM response: {e}")
+        except ValueError as e:
+            logger.warning("Could not parse LLM consolidation response: %s", e)
             return None
         except Exception as e:
-            print(f"Error in synthesis: {e}")
+            logger.error("Error synthesizing cluster: %s", e)
             return None
+
+    @staticmethod
+    def _clamp_score(value, default: float = 0.5) -> float:
+        """Coerce an LLM-provided score into the [0, 1] range."""
+        try:
+            return min(1.0, max(0.0, float(value)))
+        except (TypeError, ValueError):
+            return default
 
     def _extract_common_tags(self, episodes: list[Episode]) -> list[str]:
         """Extract common tags across episodes."""
@@ -303,7 +305,7 @@ class MemoryConsolidator:
             return []
 
         # Count tag frequency
-        tag_counts = {}
+        tag_counts: dict[str, int] = {}
         for ep in episodes:
             for tag in ep.tags:
                 tag_counts[tag] = tag_counts.get(tag, 0) + 1
@@ -321,7 +323,8 @@ class MemoryConsolidator:
 def consolidate_memories(
     project_name: str,
     min_cluster_size: int = 3,
-    storage: Optional[MemoryStorage] = None
+    storage: Optional[MemoryStorage] = None,
+    force: bool = False,
 ) -> list[MetaMemory]:
     """
     Convenience function to consolidate a project's memories.
@@ -330,6 +333,7 @@ def consolidate_memories(
         project_name: Project name to consolidate
         min_cluster_size: Minimum episodes per cluster
         storage: Storage instance (optional)
+        force: Re-consolidate episodes already covered by a meta-memory
 
     Returns:
         List of generated meta-memories
@@ -339,4 +343,4 @@ def consolidate_memories(
         min_cluster_size=min_cluster_size
     )
 
-    return consolidator.consolidate_project(project_name)
+    return consolidator.consolidate_project(project_name, force=force)

@@ -42,7 +42,7 @@ class TestModels:
                 raw_thinking="I chose JWT for scalability"
             ),
             solution="from jose import jwt...",
-            solution_summary="JWT con tokens de 24h",
+            solution_summary="JWT with 24h tokens",
             episode_type=EpisodeType.FEATURE,
             tags=["auth", "jwt"],
             project_name="test-project"

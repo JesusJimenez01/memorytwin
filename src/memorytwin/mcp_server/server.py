@@ -1,28 +1,44 @@
 """
 MCP Server for Memory Twin
-============================
+==========================
 
 Implements the Model Context Protocol to expose the
 capabilities of Escriba and Oráculo to compatible clients.
+
+The server speaks JSON-RPC over stdio, so nothing in this process may
+write to stdout: logs and progress output go to stderr.
 """
 
+import asyncio
 import json
 import logging
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
+from uuid import UUID
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import (
-    CallToolResult,
-    TextContent,
-    Tool,
-)
+from mcp.types import CallToolResult, TextContent, Tool
 
-# Importar observabilidad (config.py ya carga .env)
-from memorytwin.observability import _get_langfuse, _is_disabled, flush_traces
+from memorytwin.consolidation import MemoryConsolidator
+from memorytwin.escriba.processor import ThoughtProcessor
+from memorytwin.escriba.storage import MemoryStorage
+from memorytwin.mcp_server.tools import TOOLS
+from memorytwin.models import Episode, EpisodeType, MemoryQuery, ProcessedInput, ReasoningTrace
+from memorytwin.observability import trace_observation
+from memorytwin.oraculo.rag_engine import RAGEngine
+
+logger = logging.getLogger("memorytwin.mcp")
+
+# Below this many episodes the whole memory fits in context; above it we switch
+# to "smart" mode (recent + semantically relevant episodes only)
+FULL_CONTEXT_THRESHOLD = 20
+
+# Upper bound for a consolidation run triggered from an MCP client
+CONSOLIDATION_TIMEOUT_SECONDS = 120.0
 
 
 def _format_lessons(lessons: list) -> list:
@@ -37,14 +53,24 @@ def _format_lessons(lessons: list) -> list:
                 formatted_lesson[key] = value
         formatted.append(formatted_lesson)
     return formatted
-from memorytwin.escriba.processor import ThoughtProcessor
-from memorytwin.escriba.storage import MemoryStorage
-from memorytwin.models import Episode, EpisodeType, MemoryQuery, ProcessedInput, ReasoningTrace
-from memorytwin.oraculo.rag_engine import RAGEngine
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("memorytwin.mcp")
+
+def _json_result(data: Any, is_error: bool = False) -> CallToolResult:
+    """Wrap a JSON-serializable payload as an MCP tool result."""
+    return CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(data, indent=2, ensure_ascii=False, default=str))],
+        isError=is_error,
+    )
+
+
+def _text_result(text: str, is_error: bool = False) -> CallToolResult:
+    """Wrap plain text as an MCP tool result."""
+    return CallToolResult(content=[TextContent(type="text", text=text)], isError=is_error)
+
+
+def _episode_brief(episode: dict) -> dict:
+    """Compact view of a timeline entry for context responses."""
+    return {key: episode[key] for key in ("id", "type", "task", "summary", "date", "tags")}
 
 
 def _detect_project_name() -> str:
@@ -85,11 +111,11 @@ def _detect_project_name() -> str:
         if not project_name:
             return "default"
 
-        logger.debug(f"Auto-detected project: {project_name}")
+        logger.debug("Auto-detected project: %s", project_name)
         return project_name
 
     except Exception as e:
-        logger.warning(f"Could not detect project: {e}")
+        logger.warning("Could not detect project: %s", e)
         return "default"
 
 
@@ -97,12 +123,11 @@ class MemoryTwinMCPServer:
     """
     MCP server that exposes Memory Twin tools.
 
-    Available tools:
-    - capture_thinking: Capture an assistant's reasoning
-    - query_memory: Query memories with RAG
-    - get_timeline: Get decision timeline
-    - get_lessons: Get lessons learned
-    - get_episode: Get episode by ID
+    Tool groups (schemas live in ``memorytwin.mcp_server.tools``):
+    - Capture: capture_thinking, capture_decision, capture_quick, onboard_project
+    - Retrieval: get_project_context, query_memory, search_episodes, get_episode,
+      get_timeline, get_lessons, get_statistics
+    - Curation: mark_episode, consolidate_memories, check_consolidation_status
     """
 
     def __init__(self):
@@ -118,13 +143,22 @@ class MemoryTwinMCPServer:
         logger.info("Memory Twin MCP Server initialized")
 
     def _lazy_init(self):
-        """Lazy initialization of components."""
-        if self.processor is None:
-            self.processor = ThoughtProcessor()
+        """
+        Lazy initialization of components.
+
+        Storage and retrieval are always available. The LLM processor is
+        optional: without an API key, captures are stored unstructured and
+        every read-only tool keeps working.
+        """
         if self.storage is None:
             self.storage = MemoryStorage()
         if self.rag_engine is None:
             self.rag_engine = RAGEngine(storage=self.storage)
+        if self.processor is None:
+            try:
+                self.processor = ThoughtProcessor()
+            except Exception as e:
+                logger.warning("LLM processor unavailable, captures will be stored raw: %s", e)
 
     def _register_tools(self):
         """Register all MCP tools."""
@@ -132,477 +166,79 @@ class MemoryTwinMCPServer:
         @self.server.list_tools()
         async def list_tools() -> list[Tool]:
             """List available tools."""
-            return [
-                Tool(
-                    name="capture_thinking",
-                    description=(
-                        "Captures and stores the reasoning ('thinking') of an AI assistant. "
-                        "Processes the text with an LLM to structure it into a memory episode "
-                        "that includes task, context, alternatives considered, decision factors, "
-                        "solution, and lessons learned."
-                    ),
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "thinking_text": {
-                                "type": "string",
-                                "description": "Visible model reasoning text"
-                            },
-                            "user_prompt": {
-                                "type": "string",
-                                "description": "Original user prompt (optional)"
-                            },
-                            "code_changes": {
-                                "type": "string",
-                                "description": "Associated code changes (optional)"
-                            },
-                            "source_assistant": {
-                                "type": "string",
-                                "description": "Source assistant: copilot, claude, cursor, etc.",
-                                "default": "unknown"
-                            },
-                            "project_name": {
-                                "type": "string",
-                                "description": "Project name (auto-detected from working directory if not specified)"
-                            }
-                        },
-                        "required": ["thinking_text"]
-                    }
-                ),
-                # Structured capture tool: capture_decision
-                Tool(
-                    name="capture_decision",
-                    description=(
-                        "PREFERRED TOOL FOR CAPTURING DECISIONS.\n\n"
-                        "Captures a technical decision in a structured format with separate fields. "
-                        "More convenient than capture_thinking when data is organized.\n\n"
-                        "Usage example:\n"
-                        "- task: 'Choose database for the project'\n"
-                        "- decision: 'PostgreSQL'\n"
-                        "- alternatives: ['MongoDB', 'MySQL', 'SQLite']\n"
-                        "- reasoning: 'We need ACID transactions and complex queries'\n"
-                        "- lesson: 'For relational data with transactions, SQL > NoSQL'"
-                    ),
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "task": {
-                                "type": "string",
-                                "description": "Brief description of the task or problem solved"
-                            },
-                            "decision": {
-                                "type": "string",
-                                "description": "The decision or solution taken"
-                            },
-                            "alternatives": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "Alternatives considered (optional)"
-                            },
-                            "reasoning": {
-                                "type": "string",
-                                "description": "Why this decision was made"
-                            },
-                            "lesson": {
-                                "type": "string",
-                                "description": "Lesson learned for the future (optional)"
-                            },
-                            "context": {
-                                "type": "string",
-                                "description": "Additional relevant context (optional)"
-                            },
-                            "code_changes": {
-                                "type": "string",
-                                "description": "Associated code changes (optional)"
-                            },
-                            "source_assistant": {
-                                "type": "string",
-                                "description": "Source assistant: copilot, claude, cursor, etc.",
-                                "default": "unknown"
-                            },
-                            "project_name": {
-                                "type": "string",
-                                "description": "Project name (auto-detected from working directory if not specified)"
-                            }
-                        },
-                        "required": ["task", "decision", "reasoning"]
-                    }
-                ),
-                # Quick capture tool: capture_quick
-                Tool(
-                    name="capture_quick",
-                    description=(
-                        "QUICK CAPTURE - Minimum effort.\n\n"
-                        "For when you need to save something quickly without much detail. "
-                        "Only requires WHAT (what you did) and WHY (why you did it).\n\n"
-                        "Examples:\n"
-                        "- what: 'Added retry logic to HTTP client'\n"
-                        "  why: 'API calls were failing intermittently'\n\n"
-                        "- what: 'Switched from axios to fetch'\n"
-                        "  why: 'Reduce dependencies, native fetch is sufficient'"
-                    ),
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "what": {
-                                "type": "string",
-                                "description": "What did you do? (action or change performed)"
-                            },
-                            "why": {
-                                "type": "string",
-                                "description": "Why did you do it? (reason or problem solved)"
-                            },
-                            "lesson": {
-                                "type": "string",
-                                "description": "Lesson learned (optional but recommended)"
-                            },
-                            "project_name": {
-                                "type": "string",
-                                "description": "Project name (auto-detected from working directory if not specified)"
-                            },
-                            "source_assistant": {
-                                "type": "string",
-                                "description": "Source assistant",
-                                "default": "unknown"
-                            }
-                        },
-                        "required": ["what", "why"]
-                    }
-                ),
-                Tool(
-                    name="query_memory",
-                    description=(
-                        "Queries episodic memories using RAG (Retrieval-Augmented Generation). "
-                        "Allows asking questions like 'Why did we choose X?' or "
-                        "'What alternatives did we consider for Y?'. "
-                        "Returns a generated answer based on relevant episodes."
-                    ),
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "question": {
-                                "type": "string",
-                                "description": "Question to answer using stored memories"
-                            },
-                            "project_name": {
-                                "type": "string",
-                                "description": "Filter by specific project (optional)"
-                            },
-                            "num_episodes": {
-                                "type": "integer",
-                                "description": "Number of episodes to query (1-10)",
-                                "default": 5
-                            }
-                        },
-                        "required": ["question"]
-                    }
-                ),
-                Tool(
-                    name="get_timeline",
-                    description=(
-                        "Gets the chronological timeline of technical decisions. "
-                        "Useful for viewing project evolution and understanding what was done and when."
-                    ),
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "project_name": {
-                                "type": "string",
-                                "description": "Filter by project (optional)"
-                            },
-                            "limit": {
-                                "type": "integer",
-                                "description": "Maximum episodes to return",
-                                "default": 20
-                            }
-                        },
-                        "required": []
-                    }
-                ),
-                Tool(
-                    name="get_lessons",
-                    description=(
-                        "Gets aggregated lessons learned from multiple episodes. "
-                        "Useful for onboarding and avoiding past mistakes."
-                    ),
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "project_name": {
-                                "type": "string",
-                                "description": "Filter by project (optional)"
-                            },
-                            "tags": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "Filter by specific tags (optional)"
-                            }
-                        },
-                        "required": []
-                    }
-                ),
-                Tool(
-                    name="search_episodes",
-                    description=(
-                        "Simple semantic search of episodes. "
-                        "Returns the most relevant episodes for a search term."
-                    ),
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "Search term"
-                            },
-                            "project_name": {
-                                "type": "string",
-                                "description": "Filter by project (optional)"
-                            },
-                            "top_k": {
-                                "type": "integer",
-                                "description": "Number of results",
-                                "default": 5
-                            }
-                        },
-                        "required": ["query"]
-                    }
-                ),
-                Tool(
-                    name="get_statistics",
-                    description=(
-                        "Gets memory database statistics: "
-                        "total episodes, distribution by type and assistant."
-                    ),
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "project_name": {
-                                "type": "string",
-                                "description": "Filter by project (optional)"
-                            }
-                        },
-                        "required": []
-                    }
-                ),
-                Tool(
-                    name="get_episode",
-                    description=(
-                        "Gets the FULL content of a specific episode by its ID. "
-                        "Includes the complete reasoning (thinking), all alternatives considered, "
-                        "decision factors, detailed context, and lessons learned. "
-                        "Use when you need to dive into the details of a specific decision."
-                    ),
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "episode_id": {
-                                "type": "string",
-                                "description": "UUID of the episode to retrieve"
-                            }
-                        },
-                        "required": ["episode_id"]
-                    }
-                ),
-                Tool(
-                    name="onboard_project",
-                    description=(
-                        "Analyzes an existing project and creates an 'onboarding' episode with information "
-                        "about its structure, tech stack, architectural patterns, dependencies, "
-                        "and conventions. Use when starting work on a new or unfamiliar project "
-                        "to provide initial context to the agent."
-                    ),
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "project_path": {
-                                "type": "string",
-                                "description": "Absolute path to the project to analyze"
-                            },
-                            "project_name": {
-                                "type": "string",
-                                "description": "Project name (auto-detected if not specified)"
-                            }
-                        },
-                        "required": ["project_path"]
-                    }
-                ),
-                Tool(
-                    name="get_project_context",
-                    description=(
-                        "MAIN TOOL - USE ALWAYS AT THE START OF EACH TASK.\n\n"
-                        "Gets intelligent context with PRIORITIZATION:\n"
-                        "0. ANTIPATTERNS: Warnings about previous errors (if relevant)\n"
-                        "1. META-MEMORIES: Consolidated knowledge and patterns\n"
-                        "2. EPISODES: Relevant individual decisions\n\n"
-                        "If there are antipattern WARNINGS, you MUST review them before proceeding.\n"
-                        "Use include_reasoning=true to get the full reasoning."
-                    ),
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "topic": {
-                                "type": "string",
-                                "description": "Topic or keywords for the current task (for semantic search)"
-                            },
-                            "project_name": {
-                                "type": "string",
-                                "description": "Filter by specific project (optional)"
-                            },
-                            "include_reasoning": {
-                                "type": "boolean",
-                                "description": (
-                                    "If true, includes full raw_thinking from relevant episodes "
-                                    "(more tokens but more context)"
-                                )
-                            }
-                        },
-                        "required": []
-                    }
-                ),
-                Tool(
-                    name="consolidate_memories",
-                    description=(
-                        "Consolidates similar episodes into META-MEMORIES using clustering and LLM. "
-                        "Meta-memories group recurring patterns, lessons learned, and best practices, "
-                        "enabling quick access to consolidated knowledge without searching individual "
-                        "episodes.\n\n"
-                        "Use when:\n"
-                        "- The system suggests consolidation (indicator in get_project_context)\n"
-                        "- There are many unconsolidated episodes (>20)\n"
-                        "- Episodes with high access_count indicate frequent patterns\n\n"
-                        "Result: Meta-memories with patterns, lessons, best practices, and antipatterns."
-                    ),
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "project_name": {
-                                "type": "string",
-                                "description": "Project name to consolidate (required)"
-                            },
-                            "min_cluster_size": {
-                                "type": "integer",
-                                "description": "Minimum episodes to form a cluster (default: 3)"
-                            }
-                        },
-                        "required": ["project_name"]
-                    }
-                ),
-                Tool(
-                    name="check_consolidation_status",
-                    description=(
-                        "Checks if the project needs memory consolidation. "
-                        "Analyzes episodes with high usage (access_count) and number of unconsolidated "
-                        "episodes. Useful for deciding whether to run consolidate_memories."
-                    ),
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "project_name": {
-                                "type": "string",
-                                "description": "Project name to check (optional)"
-                            }
-                        },
-                        "required": []
-                    }
-                ),
-                Tool(
-                    name="mark_episode",
-                    description=(
-                        "Marks an episode with special flags:\n"
-                        "- is_antipattern=true: This episode represents a MISTAKE or something NOT to do. "
-                        "It will be shown as a WARNING in future queries.\n"
-                        "- is_critical=true: This episode is critical and should be prioritized in searches.\n"
-                        "- superseded_by: UUID of the episode that replaces this one.\n"
-                        "- deprecation_reason: Reason why this episode no longer applies.\n\n"
-                        "Use after discovering that a previous solution was incorrect or to highlight "
-                        "important decisions."
-                    ),
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "episode_id": {
-                                "type": "string",
-                                "description": "UUID of the episode to mark"
-                            },
-                            "is_antipattern": {
-                                "type": "boolean",
-                                "description": "Mark as antipattern (something NOT to do)"
-                            },
-                            "is_critical": {
-                                "type": "boolean",
-                                "description": "Mark as critical (high priority)"
-                            },
-                            "superseded_by": {
-                                "type": "string",
-                                "description": "UUID of the episode that replaces this one"
-                            },
-                            "deprecation_reason": {
-                                "type": "string",
-                                "description": "Reason why this episode no longer applies"
-                            }
-                        },
-                        "required": ["episode_id"]
-                    }
-                )
-            ]
+            return TOOLS
 
         @self.server.call_tool()
         async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
             """Execute a tool."""
             self._lazy_init()
 
+            handler = self._handlers().get(name)
+            if handler is None:
+                return _text_result(f"Unknown tool: {name}", is_error=True)
+
             try:
-                match name:
-                    case "capture_thinking":
-                        return await self._capture_thinking(arguments)
-                    case "capture_decision":
-                        return await self._capture_decision(arguments)
-                    case "capture_quick":
-                        return await self._capture_quick(arguments)
-                    case "query_memory":
-                        return await self._query_memory(arguments)
-                    case "get_timeline":
-                        return await self._get_timeline(arguments)
-                    case "get_lessons":
-                        return await self._get_lessons(arguments)
-                    case "search_episodes":
-                        return await self._search_episodes(arguments)
-                    case "get_statistics":
-                        return await self._get_statistics(arguments)
-                    case "get_episode":
-                        return await self._get_episode(arguments)
-                    case "onboard_project":
-                        return await self._onboard_project(arguments)
-                    case "get_project_context":
-                        return await self._get_project_context(arguments)
-                    case "consolidate_memories":
-                        return await self._consolidate_memories(arguments)
-                    case "check_consolidation_status":
-                        return await self._check_consolidation_status(arguments)
-                    case "mark_episode":
-                        return await self._mark_episode(arguments)
-                    case _:
-                        return CallToolResult(
-                            content=[TextContent(
-                                type="text",
-                                text=f"Unknown tool: {name}"
-                            )],
-                            isError=True
-                        )
+                return await handler(arguments)
             except Exception as e:
-                logger.error(f"Error in tool {name}: {e}")
-                return CallToolResult(
-                    content=[TextContent(
-                        type="text",
-                        text=f"Error executing {name}: {str(e)}"
-                    )],
-                    isError=True
-                )
+                logger.exception("Error in tool %s", name)
+                return _text_result(f"Error executing {name}: {e}", is_error=True)
+
+    def _handlers(self) -> dict[str, Callable[[dict], Awaitable[CallToolResult]]]:
+        """Map each MCP tool name to its handler."""
+        return {
+            "capture_thinking": self._capture_thinking,
+            "capture_decision": self._capture_decision,
+            "capture_quick": self._capture_quick,
+            "query_memory": self._query_memory,
+            "get_timeline": self._get_timeline,
+            "get_lessons": self._get_lessons,
+            "search_episodes": self._search_episodes,
+            "get_statistics": self._get_statistics,
+            "get_episode": self._get_episode,
+            "onboard_project": self._onboard_project,
+            "get_project_context": self._get_project_context,
+            "consolidate_memories": self._consolidate_memories,
+            "check_consolidation_status": self._check_consolidation_status,
+            "mark_episode": self._mark_episode,
+        }
+
+    async def _structure_episode(
+        self,
+        raw_input: ProcessedInput,
+        project_name: str,
+        source_assistant: str,
+        fallback: Callable[[], Episode],
+        tool_name: str,
+    ) -> tuple[Episode, bool]:
+        """
+        Structure a capture with the LLM, degrading to a raw episode on failure.
+
+        Knowledge must never be lost because the LLM is unavailable (no API key,
+        rate limit, invalid JSON...), so every capture tool provides a fallback
+        that builds the episode directly from the user-supplied fields.
+
+        Returns:
+            Tuple (episode, structured_by_llm)
+        """
+        if self.processor is None:
+            logger.warning("%s: LLM not configured, storing raw capture", tool_name)
+            return fallback(), False
+
+        try:
+            episode = await self.processor.process_thought(
+                raw_input,
+                project_name=project_name,
+                source_assistant=source_assistant
+            )
+            return episode, True
+        except Exception as exc:
+            logger.warning("%s fallback activated due to LLM processing error: %s", tool_name, exc)
+            return fallback(), False
 
     async def _capture_thinking(self, args: dict) -> CallToolResult:
         """Capture thinking and store it."""
-        # Auto-detect project if not provided
         project_name = args.get("project_name") or _detect_project_name()
+        source_assistant = args.get("source_assistant", "unknown")
 
         raw_input = ProcessedInput(
             raw_text=args["thinking_text"],
@@ -611,20 +247,8 @@ class MemoryTwinMCPServer:
             source="mcp"
         )
 
-        source_assistant = args.get("source_assistant", "unknown")
-
-        try:
-            episode = await self.processor.process_thought(
-                raw_input,
-                project_name=project_name,
-                source_assistant=source_assistant
-            )
-        except Exception as exc:
-            logger.warning(
-                "capture_thinking fallback activated due to LLM processing error: %s",
-                exc,
-            )
-            episode = Episode(
+        def fallback() -> Episode:
+            return Episode(
                 task="Raw technical reasoning capture",
                 context="Captured via MCP fallback without LLM structuring",
                 reasoning_trace=ReasoningTrace(raw_thinking=args["thinking_text"]),
@@ -632,35 +256,30 @@ class MemoryTwinMCPServer:
                 solution_summary="Raw capture stored without LLM structuring",
                 episode_type=EpisodeType.LEARNING,
                 tags=["mcp", "fallback", "raw_capture"],
-                lessons_learned=[],
                 project_name=project_name,
                 source_assistant=source_assistant,
             )
 
+        episode, structured = await self._structure_episode(
+            raw_input, project_name, source_assistant, fallback, "capture_thinking"
+        )
         episode_id = self.storage.store_episode(episode)
 
-        result = {
+        return _json_result({
             "success": True,
             "episode_id": episode_id,
-            "project": project_name,  # Project where it was saved
+            "project": project_name,
+            "structured_by_llm": structured,
             "task": episode.task,
             "type": episode.episode_type.value,
             "tags": episode.tags,
             "lessons_learned": episode.lessons_learned
-        }
-
-        return CallToolResult(
-            content=[TextContent(
-                type="text",
-                text=json.dumps(result, indent=2, ensure_ascii=False)
-            )]
-        )
+        })
 
     async def _capture_decision(self, args: dict) -> CallToolResult:
         """Capture a technical decision in structured format."""
         # Build structured text from separate fields
-        parts = []
-        parts.append(f"## Task\n{args['task']}")
+        parts = [f"## Task\n{args['task']}"]
 
         if args.get("context"):
             parts.append(f"## Context\n{args['context']}")
@@ -676,9 +295,8 @@ class MemoryTwinMCPServer:
             parts.append(f"## Lesson learned\n{args['lesson']}")
 
         thinking_text = "\n\n".join(parts)
-
-        # Auto-detect project if not provided
         project_name = args.get("project_name") or _detect_project_name()
+        source_assistant = args.get("source_assistant", "unknown")
 
         raw_input = ProcessedInput(
             raw_text=thinking_text,
@@ -686,25 +304,11 @@ class MemoryTwinMCPServer:
             source="mcp"
         )
 
-        source_assistant = args.get("source_assistant", "unknown")
-
-        try:
-            episode = await self.processor.process_thought(
-                raw_input,
-                project_name=project_name,
-                source_assistant=source_assistant
-            )
-        except Exception as exc:
-            logger.warning(
-                "capture_decision fallback activated due to LLM processing error: %s",
-                exc,
-            )
-            lessons = [args["lesson"]] if args.get("lesson") else []
-            fallback_tags = ["mcp", "capture_decision", "fallback"]
+        def fallback() -> Episode:
+            tags = ["mcp", "capture_decision", "fallback"]
             if args.get("alternatives"):
-                fallback_tags.append("alternatives")
-
-            episode = Episode(
+                tags.append("alternatives")
+            return Episode(
                 task=args["task"],
                 context=args.get("context", "Captured via structured decision tool"),
                 reasoning_trace=ReasoningTrace(
@@ -715,68 +319,46 @@ class MemoryTwinMCPServer:
                 solution=args["decision"],
                 solution_summary=args["decision"],
                 episode_type=EpisodeType.DECISION,
-                tags=fallback_tags,
-                lessons_learned=lessons,
+                tags=tags,
+                lessons_learned=[args["lesson"]] if args.get("lesson") else [],
                 project_name=project_name,
                 source_assistant=source_assistant,
             )
 
+        episode, structured = await self._structure_episode(
+            raw_input, project_name, source_assistant, fallback, "capture_decision"
+        )
         episode_id = self.storage.store_episode(episode)
 
-        result = {
+        return _json_result({
             "success": True,
             "episode_id": episode_id,
-            "project": project_name,  # Project where it was saved
+            "project": project_name,
+            "structured_by_llm": structured,
             "task": episode.task,
             "decision": args["decision"],
             "type": episode.episode_type.value,
             "tags": episode.tags,
             "lessons_learned": episode.lessons_learned
-        }
-
-        return CallToolResult(
-            content=[TextContent(
-                type="text",
-                text=json.dumps(result, indent=2, ensure_ascii=False)
-            )]
-        )
+        })
 
     async def _capture_quick(self, args: dict) -> CallToolResult:
         """Quick capture with minimum effort."""
-        # Build simple text from what/why
         parts = [
             f"## What I did\n{args['what']}",
             f"## Why\n{args['why']}"
         ]
-
         if args.get("lesson"):
             parts.append(f"## Lesson\n{args['lesson']}")
 
         thinking_text = "\n\n".join(parts)
-
-        # Auto-detect project if not provided
         project_name = args.get("project_name") or _detect_project_name()
-
-        raw_input = ProcessedInput(
-            raw_text=thinking_text,
-            source="mcp"
-        )
-
         source_assistant = args.get("source_assistant", "unknown")
 
-        try:
-            episode = await self.processor.process_thought(
-                raw_input,
-                project_name=project_name,
-                source_assistant=source_assistant
-            )
-        except Exception as exc:
-            logger.warning(
-                "capture_quick fallback activated due to LLM processing error: %s",
-                exc,
-            )
-            lessons = [args["lesson"]] if args.get("lesson") else []
-            episode = Episode(
+        raw_input = ProcessedInput(raw_text=thinking_text, source="mcp")
+
+        def fallback() -> Episode:
+            return Episode(
                 task=args["what"],
                 context=f"Reason: {args['why']}",
                 reasoning_trace=ReasoningTrace(raw_thinking=thinking_text),
@@ -784,28 +366,25 @@ class MemoryTwinMCPServer:
                 solution_summary=args["what"],
                 episode_type=EpisodeType.LEARNING,
                 tags=["mcp", "capture_quick", "fallback"],
-                lessons_learned=lessons,
+                lessons_learned=[args["lesson"]] if args.get("lesson") else [],
                 project_name=project_name,
                 source_assistant=source_assistant,
             )
 
+        episode, structured = await self._structure_episode(
+            raw_input, project_name, source_assistant, fallback, "capture_quick"
+        )
         episode_id = self.storage.store_episode(episode)
 
-        result = {
+        return _json_result({
             "success": True,
             "episode_id": episode_id,
-            "project": project_name,  # Include project in response
+            "project": project_name,
+            "structured_by_llm": structured,
             "task": episode.task,
             "type": episode.episode_type.value,
             "lessons_learned": episode.lessons_learned
-        }
-
-        return CallToolResult(
-            content=[TextContent(
-                type="text",
-                text=json.dumps(result, indent=2, ensure_ascii=False)
-            )]
-        )
+        })
 
     async def _query_memory(self, args: dict) -> CallToolResult:
         """Query memory with RAG."""
@@ -814,13 +393,7 @@ class MemoryTwinMCPServer:
             project_name=args.get("project_name"),
             top_k=args.get("num_episodes", 5)
         )
-
-        return CallToolResult(
-            content=[TextContent(
-                type="text",
-                text=result["answer"]
-            )]
-        )
+        return _text_result(result["answer"])
 
     async def _get_timeline(self, args: dict) -> CallToolResult:
         """Get decision timeline."""
@@ -828,13 +401,7 @@ class MemoryTwinMCPServer:
             project_name=args.get("project_name"),
             limit=args.get("limit", 20)
         )
-
-        return CallToolResult(
-            content=[TextContent(
-                type="text",
-                text=json.dumps(timeline, indent=2, ensure_ascii=False)
-            )]
-        )
+        return _json_result(timeline)
 
     async def _get_lessons(self, args: dict) -> CallToolResult:
         """Get lessons learned."""
@@ -843,22 +410,16 @@ class MemoryTwinMCPServer:
             tags=args.get("tags")
         )
 
-        # Format for readability
-        formatted = []
-        for lesson in lessons:
-            formatted.append({
+        formatted = [
+            {
                 "lesson": lesson["lesson"],
                 "from_task": lesson["from_task"],
                 "date": lesson["timestamp"].strftime("%Y-%m-%d"),
                 "tags": lesson["tags"]
-            })
-
-        return CallToolResult(
-            content=[TextContent(
-                type="text",
-                text=json.dumps(formatted, indent=2, ensure_ascii=False)
-            )]
-        )
+            }
+            for lesson in lessons
+        ]
+        return _json_result(formatted)
 
     async def _search_episodes(self, args: dict) -> CallToolResult:
         """Semantic search of episodes."""
@@ -870,61 +431,34 @@ class MemoryTwinMCPServer:
 
         results = self.storage.search_episodes(query)
 
-        formatted = []
-        for r in results:
-            formatted.append({
+        formatted = [
+            {
                 "id": str(r.episode.id),
                 "task": r.episode.task,
                 "summary": r.episode.solution_summary,
                 "type": r.episode.episode_type.value,
                 "relevance": f"{r.relevance_score:.0%}",
                 "date": r.episode.timestamp.strftime("%Y-%m-%d")
-            })
-
-        return CallToolResult(
-            content=[TextContent(
-                type="text",
-                text=json.dumps(formatted, indent=2, ensure_ascii=False)
-            )]
-        )
+            }
+            for r in results
+        ]
+        return _json_result(formatted)
 
     async def _get_statistics(self, args: dict) -> CallToolResult:
         """Get statistics."""
-        stats = self.storage.get_statistics(args.get("project_name"))
-
-        return CallToolResult(
-            content=[TextContent(
-                type="text",
-                text=json.dumps(stats, indent=2, ensure_ascii=False)
-            )]
-        )
+        return _json_result(self.storage.get_statistics(args.get("project_name")))
 
     async def _get_episode(self, args: dict) -> CallToolResult:
         """Get full episode by ID."""
         episode_id = args.get("episode_id")
-
         if not episode_id:
-            return CallToolResult(
-                content=[TextContent(
-                    type="text",
-                    text="Error: episode_id is required"
-                )],
-                isError=True
-            )
+            return _text_result("Error: episode_id is required", is_error=True)
 
         episode = self.storage.get_episode_by_id(episode_id)
-
         if not episode:
-            return CallToolResult(
-                content=[TextContent(
-                    type="text",
-                    text=f"Episode not found with ID: {episode_id}"
-                )],
-                isError=True
-            )
+            return _text_result(f"Episode not found with ID: {episode_id}", is_error=True)
 
-        # Return the full episode with all information
-        full_episode = {
+        return _json_result({
             "id": str(episode.id),
             "timestamp": episode.timestamp.isoformat(),
             "task": episode.task,
@@ -948,15 +482,13 @@ class MemoryTwinMCPServer:
             # Forgetting Curve fields
             "importance_score": episode.importance_score,
             "access_count": episode.access_count,
-            "last_accessed": episode.last_accessed.isoformat() if episode.last_accessed else None
-        }
-
-        return CallToolResult(
-            content=[TextContent(
-                type="text",
-                text=json.dumps(full_episode, indent=2, ensure_ascii=False)
-            )]
-        )
+            "last_accessed": episode.last_accessed.isoformat() if episode.last_accessed else None,
+            # Active memory flags
+            "is_antipattern": episode.is_antipattern,
+            "is_critical": episode.is_critical,
+            "superseded_by": str(episode.superseded_by) if episode.superseded_by else None,
+            "deprecation_reason": episode.deprecation_reason,
+        })
 
     async def _onboard_project(self, args: dict) -> CallToolResult:
         """Analyze project and create an onboarding episode."""
@@ -964,13 +496,9 @@ class MemoryTwinMCPServer:
 
         project_path = args.get("project_path")
         if not project_path:
-            return CallToolResult(
-                content=[TextContent(
-                    type="text",
-                    text="Error: project_path is required"
-                )],
-                isError=True
-            )
+            return _text_result("Error: project_path is required", is_error=True)
+        if not Path(project_path).is_dir():
+            return _text_result(f"Error: directory does not exist: {project_path}", is_error=True)
 
         result = await onboard_project(
             project_path=project_path,
@@ -978,9 +506,8 @@ class MemoryTwinMCPServer:
             source_assistant="mcp-onboarding"
         )
 
-        # Analysis summary
         analysis = result['analysis']
-        summary = {
+        return _json_result({
             "success": True,
             "episode_id": result['episode_id'],
             "project_name": result['project_name'],
@@ -992,23 +519,11 @@ class MemoryTwinMCPServer:
                 f"Onboarding completed. The agent now knows the structure "
                 f"of the {result['project_name']} project."
             )
-        }
-
-        return CallToolResult(
-            content=[TextContent(
-                type="text",
-                text=json.dumps(summary, indent=2, ensure_ascii=False)
-            )]
-        )
+        })
 
     async def _get_project_context(self, args: dict) -> CallToolResult:
         """
-        Get intelligent project context.
-
-        Hybrid strategy with prioritization:
-        0. FIRST: Search for relevant ANTIPATTERNS (warnings)
-        1. Then META-MEMORIES (consolidated knowledge)
-        2. Finally individual EPISODES
+        Get intelligent project context, traced as a single Langfuse span.
 
         Args:
             project_name: Filter by project
@@ -1019,256 +534,170 @@ class MemoryTwinMCPServer:
         topic = args.get("topic", "")
         include_reasoning = args.get("include_reasoning", False)
 
-        threshold = 20  # Threshold to switch strategy
+        with trace_observation(
+            "Access Memories",
+            input={"topic": topic or "no topic", "project": project_name or "all"},
+            metadata={"project": project_name or "all", "operation": "get_project_context"},
+        ) as span:
+            result = self._build_project_context(project_name, topic, include_reasoning)
+            if span is not None:
+                span.update(output={
+                    "mode": result["mode"],
+                    "episodes_count": result["total_episodes"],
+                    "meta_memories_count": result["total_meta_memories"],
+                    "warnings_count": len(result.get("WARNINGS", [])),
+                    "relevant_found": len(result.get("relevant_episodes", [])),
+                    "meta_memories_found": len(result.get("meta_memories", [])),
+                })
 
-        # Trace memory access
-        langfuse = _get_langfuse() if not _is_disabled() else None
-        span_ctx = None
-        output_data = {}
+        return _json_result(result)
 
-        try:
-            if langfuse:
-                # Use context manager for the span
-                span_ctx = langfuse.start_as_current_span(
-                    name="Access Memories",
-                    input={"topic": topic or "no topic", "project": project_name or "all"},
-                    metadata={"project": project_name or "all", "operation": "get_project_context"}
-                )
-                span_ctx.__enter__()
+    def _build_project_context(self, project_name: Optional[str], topic: str, include_reasoning: bool) -> dict:
+        """
+        Assemble the project context with prioritization:
 
-            # Get base statistics
-            stats = self.rag_engine.get_statistics()
-            total_episodes = stats.get("total_episodes", 0)
+        0. ANTIPATTERNS relevant to the topic (warnings, shown first)
+        1. META-MEMORIES (consolidated knowledge)
+        2. Individual EPISODES (everything for small memories, recent + relevant otherwise)
+        """
+        stats = self.rag_engine.get_statistics(project_name)
+        total_episodes = stats.get("total_episodes", 0)
+        meta_stats = self.storage.get_meta_memory_statistics(project_name)
 
-            # Get meta-memory statistics
-            meta_stats = self.storage.get_meta_memory_statistics(project_name)
+        result: dict[str, Any] = {
+            "mode": "",
+            "total_episodes": total_episodes,
+            "total_meta_memories": meta_stats.get("total_meta_memories", 0),
+            "statistics": stats,
+            "meta_statistics": meta_stats
+        }
 
-            result = {
-                "mode": "",
-                "total_episodes": total_episodes,
-                "total_meta_memories": meta_stats.get("total_meta_memories", 0),
-                "statistics": stats,
-                "meta_statistics": meta_stats
+        if total_episodes == 0:
+            result["mode"] = "empty"
+            result["message"] = (
+                "No memories recorded yet. "
+                "Consider running onboard_project to create initial context."
+            )
+            return result
+
+        # A single semantic search feeds both the antipattern warnings and the
+        # relevant episodes, so each retrieved episode is reinforced only once
+        topic_results = []
+        if topic:
+            topic_results = self.storage.search_episodes(
+                MemoryQuery(query=topic, project_filter=project_name, top_k=10)
+            )
+
+        # PRIORITY 0: antipatterns (critical warnings)
+        warnings = []
+        for r in topic_results:
+            if not r.episode.is_antipattern:
+                continue
+            warning = {
+                "type": "ANTIPATTERN",
+                "severity": "HIGH",
+                "task": r.episode.task,
+                "lesson": r.episode.lessons_learned[0] if r.episode.lessons_learned else "Avoid this approach",
+                "relevance": f"{r.relevance_score:.0%}"
             }
+            if include_reasoning:
+                warning["reasoning"] = r.episode.reasoning_trace.raw_thinking
+            warnings.append(warning)
 
-            if total_episodes == 0:
-                result["mode"] = "empty"
-                result["message"] = (
-                    "No memories recorded yet. "
-                    "Consider running onboard_project to create initial context."
-                )
-                # Save output for the span
-                output_data = {"mode": "empty", "episodes": 0, "message": "No memories"}
-                return CallToolResult(
-                    content=[TextContent(
-                        type="text",
-                        text=json.dumps(result, indent=2, ensure_ascii=False)
-                    )]
-                )
+        if warnings:
+            result["WARNINGS"] = warnings
+            result["warning_note"] = (
+                "ATTENTION: Relevant antipatterns found. "
+                "Review these warnings BEFORE proceeding."
+            )
 
-            # =================================================================
-            # PRIORITY 0: ANTIPATTERNS (CRITICAL WARNINGS)
-            # =================================================================
-            warnings = []
+        # PRIORITY 1: meta-memories (consolidated knowledge)
+        meta_memories_included = []
+        if meta_stats.get("total_meta_memories", 0) > 0:
             if topic:
-                query = MemoryQuery(
-                    query=topic,
-                    project_filter=project_name,
-                    top_k=10
-                )
-                all_results = self.storage.search_episodes(query)
-                for r in all_results:
-                    if getattr(r.episode, 'is_antipattern', False):
-                        warning = {
-                            "type": "ANTIPATTERN",
-                            "severity": "HIGH",
-                            "task": r.episode.task,
-                            "lesson": (
-                                r.episode.lessons_learned[0]
-                                if r.episode.lessons_learned
-                                else "Avoid this approach"
-                            ),
-                            "relevance": f"{r.relevance_score:.0%}"
-                        }
-                        if include_reasoning:
-                            warning["reasoning"] = r.episode.reasoning_trace.raw_thinking
-                        warnings.append(warning)
-
-            if warnings:
-                result["WARNINGS"] = warnings
-                result["warning_note"] = (
-                    "ATTENTION: Relevant antipatterns found. "
-                    "Review these warnings BEFORE proceeding."
-                )
-
-            # =================================================================
-            # PRIORITY 1: META-MEMORIES (Consolidated Knowledge)
-            # =================================================================
-            meta_memories_included = []
-            if meta_stats.get("total_meta_memories", 0) > 0:
-                if topic:
-                    meta_results = self.storage.search_meta_memories(
-                        query=topic,
-                        project_name=project_name,
-                        top_k=3
-                    )
-                    meta_memories_included = [
-                        {
-                            "id": str(r.meta_memory.id),
-                            "pattern": r.meta_memory.pattern_summary,
-                            "lessons": r.meta_memory.lessons[:3],
-                            "best_practices": r.meta_memory.best_practices[:2],
-                            "technologies": r.meta_memory.technologies,
-                            "episode_count": r.meta_memory.episode_count,
-                            "confidence": f"{r.meta_memory.confidence:.0%}",
-                            "relevance": f"{r.relevance_score:.0%}"
-                        }
-                        for r in meta_results
-                    ]
-                else:
-                    recent_metas = self.storage.get_meta_memories_by_project(
+                meta_memories_included = [
+                    {
+                        **self._meta_memory_brief(r.meta_memory),
+                        "relevance": f"{r.relevance_score:.0%}"
+                    }
+                    for r in self.storage.search_meta_memories(query=topic, project_name=project_name, top_k=3)
+                ]
+            else:
+                meta_memories_included = [
+                    self._meta_memory_brief(mm)
+                    for mm in self.storage.get_meta_memories_by_project(
                         project_name=project_name or "default",
                         limit=3
                     )
-                    meta_memories_included = [
-                        {
-                            "id": str(mm.id),
-                            "pattern": mm.pattern_summary,
-                            "lessons": mm.lessons[:3],
-                            "best_practices": mm.best_practices[:2],
-                            "technologies": mm.technologies,
-                            "episode_count": mm.episode_count,
-                            "confidence": f"{mm.confidence:.0%}"
-                        }
-                        for mm in recent_metas
-                    ]
-
-            if meta_memories_included:
-                result["meta_memories"] = meta_memories_included
-                result["meta_memory_note"] = (
-                    "META-MEMORIES: Consolidated knowledge from multiple episodes."
-                )
-
-            # =================================================================
-            # CHECK CONSOLIDATION NEED
-            # =================================================================
-            consolidation_check = self.storage.check_consolidation_needed(project_name)
-            if consolidation_check.get("should_consolidate"):
-                result["consolidation_recommendation"] = {
-                    "should_consolidate": True,
-                    "reason": f"There are {consolidation_check['hot_episodes_count']} high-usage episodes "
-                             f"or {consolidation_check['estimated_unconsolidated']} unconsolidated",
-                    "suggestion": "Consider running consolidation with: mt consolidate --project <name>"
-                }
-
-            # =================================================================
-            # PRIORITY 2: INDIVIDUAL EPISODES
-            # =================================================================
-            if total_episodes < threshold:
-                result["mode"] = "full_context"
-                result["message"] = f"Small memory ({total_episodes} episodes) - showing full context."
-
-                timeline = self.rag_engine.get_timeline(
-                    limit=total_episodes,
-                    project_name=project_name
-                )
-
-                episodes_summary = []
-                for ep in timeline:
-                    episode_brief = {
-                        "id": ep["id"],
-                        "type": ep["type"],
-                        "task": ep["task"],
-                        "summary": ep["summary"],
-                        "date": ep["date"],
-                        "tags": ep["tags"]
-                    }
-                    episodes_summary.append(episode_brief)
-
-                result["episodes"] = episodes_summary
-
-                if topic:
-                    lessons = self.rag_engine.get_lessons(project_name=project_name)
-                    lessons_list = lessons if isinstance(lessons, list) else lessons.get("lessons", [])
-                    result["aggregated_lessons"] = _format_lessons(lessons_list)
-
-            else:
-                result["mode"] = "smart_context"
-                result["message"] = f"Mature memory ({total_episodes} episodes) - showing optimized context."
-
-                recent = self.rag_engine.get_timeline(limit=5, project_name=project_name)
-                result["recent_episodes"] = [
-                    {
-                        "id": ep["id"],
-                        "type": ep["type"],
-                        "task": ep["task"],
-                        "summary": ep["summary"],
-                        "date": ep["date"],
-                        "tags": ep["tags"]
-                    }
-                    for ep in recent
                 ]
 
-                if topic:
-                    query = MemoryQuery(
-                        query=topic,
-                        project_filter=project_name,
-                        top_k=5
-                    )
-                    relevant_results = self.storage.search_episodes(query)
-                    relevant_episodes = []
-                    for r in relevant_results:
-                        ep_data = {
-                            "id": str(r.episode.id),
-                            "type": r.episode.episode_type.value,
-                            "task": r.episode.task,
-                            "summary": r.episode.solution_summary,
-                            "relevance": f"{r.relevance_score:.0%}",
-                            "tags": r.episode.tags,
-                            "lessons": r.episode.lessons_learned,
-                            "is_critical": getattr(r.episode, 'is_critical', False)
-                        }
-                        if include_reasoning:
-                            ep_data["reasoning"] = r.episode.reasoning_trace.raw_thinking
-                            ep_data["alternatives"] = r.episode.reasoning_trace.alternatives_considered
-                            ep_data["decision_factors"] = r.episode.reasoning_trace.decision_factors
-                        relevant_episodes.append(ep_data)
-                    result["relevant_episodes"] = relevant_episodes
+        if meta_memories_included:
+            result["meta_memories"] = meta_memories_included
+            result["meta_memory_note"] = "META-MEMORIES: Consolidated knowledge from multiple episodes."
 
-                    lessons = self.rag_engine.get_lessons(project_name=project_name)
-                    lessons_list = lessons if isinstance(lessons, list) else lessons.get("lessons", [])
-                    result["aggregated_lessons"] = _format_lessons(lessons_list)
-                else:
-                    result["tip"] = "Provide a 'topic' to get semantically relevant episodes."
-
-            # Save output for the span
-            output_data = {
-                "mode": result.get("mode"),
-                "episodes_count": total_episodes,
-                "meta_memories_count": meta_stats.get("total_meta_memories", 0),
-                "warnings_count": len(warnings),
-                "relevant_found": len(result.get("relevant_episodes", [])),
-                "meta_memories_found": len(meta_memories_included)
+        consolidation_check = self.storage.check_consolidation_needed(project_name)
+        if consolidation_check.get("should_consolidate"):
+            result["consolidation_recommendation"] = {
+                "should_consolidate": True,
+                "reason": (
+                    f"There are {consolidation_check['hot_episodes_count']} high-usage episodes "
+                    f"or {consolidation_check['estimated_unconsolidated']} unconsolidated"
+                ),
+                "suggestion": "Run the consolidate_memories tool or: mt consolidate --project <name>"
             }
 
-            return CallToolResult(
-                content=[TextContent(
-                    type="text",
-                    text=json.dumps(result, indent=2, ensure_ascii=False)
-                )]
-            )
+        # PRIORITY 2: individual episodes
+        if total_episodes < FULL_CONTEXT_THRESHOLD:
+            result["mode"] = "full_context"
+            result["message"] = f"Small memory ({total_episodes} episodes) - showing full context."
+            timeline = self.rag_engine.get_timeline(limit=total_episodes, project_name=project_name)
+            result["episodes"] = [_episode_brief(ep) for ep in timeline]
+        else:
+            result["mode"] = "smart_context"
+            result["message"] = f"Mature memory ({total_episodes} episodes) - showing optimized context."
+            recent = self.rag_engine.get_timeline(limit=5, project_name=project_name)
+            result["recent_episodes"] = [_episode_brief(ep) for ep in recent]
 
-        finally:
-            # Close span with output and flush
-            if span_ctx:
-                try:
-                    from langfuse.decorators import langfuse_context
-                    langfuse_context.update_current_observation(output=output_data)
-                    span_ctx.__exit__(None, None, None)
-                except Exception:
-                    pass
-            if langfuse:
-                flush_traces()
+            if topic:
+                relevant_episodes = []
+                for r in topic_results[:5]:
+                    ep_data = {
+                        "id": str(r.episode.id),
+                        "type": r.episode.episode_type.value,
+                        "task": r.episode.task,
+                        "summary": r.episode.solution_summary,
+                        "relevance": f"{r.relevance_score:.0%}",
+                        "tags": r.episode.tags,
+                        "lessons": r.episode.lessons_learned,
+                        "is_critical": r.episode.is_critical
+                    }
+                    if include_reasoning:
+                        ep_data["reasoning"] = r.episode.reasoning_trace.raw_thinking
+                        ep_data["alternatives"] = r.episode.reasoning_trace.alternatives_considered
+                        ep_data["decision_factors"] = r.episode.reasoning_trace.decision_factors
+                    relevant_episodes.append(ep_data)
+                result["relevant_episodes"] = relevant_episodes
+            else:
+                result["tip"] = "Provide a 'topic' to get semantically relevant episodes."
+
+        if topic:
+            lessons = self.rag_engine.get_lessons(project_name=project_name)
+            result["aggregated_lessons"] = _format_lessons(lessons)
+
+        return result
+
+    @staticmethod
+    def _meta_memory_brief(meta_memory) -> dict:
+        """Compact view of a meta-memory for context responses."""
+        return {
+            "id": str(meta_memory.id),
+            "pattern": meta_memory.pattern_summary,
+            "lessons": meta_memory.lessons[:3],
+            "best_practices": meta_memory.best_practices[:2],
+            "technologies": meta_memory.technologies,
+            "episode_count": meta_memory.episode_count,
+            "confidence": f"{meta_memory.confidence:.0%}"
+        }
 
     async def _consolidate_memories(self, args: dict) -> CallToolResult:
         """
@@ -1276,212 +705,133 @@ class MemoryTwinMCPServer:
 
         Uses DBSCAN clustering + LLM to synthesize knowledge.
         """
-        import asyncio
-        from concurrent.futures import ThreadPoolExecutor
-
-        from memorytwin.consolidation import MemoryConsolidator
-
         project_name = args.get("project_name")
         if not project_name:
-            return CallToolResult(
-                content=[TextContent(
-                    type="text",
-                    text="Error: project_name is required to consolidate memories"
-                )],
-                isError=True
-            )
+            return _text_result("Error: project_name is required to consolidate memories", is_error=True)
 
         min_cluster_size = args.get("min_cluster_size", 3)
+        force = bool(args.get("force", False))
+
+        stats = self.storage.get_statistics(project_name)
+        total_episodes = stats['total_episodes']
+
+        if total_episodes < min_cluster_size:
+            return _json_result({
+                "success": False,
+                "message": (
+                    f"Project '{project_name}' only has {total_episodes} episodes. "
+                    f"At least {min_cluster_size} are needed to consolidate."
+                ),
+                "total_episodes": total_episodes,
+                "min_required": min_cluster_size
+            })
 
         try:
-            # Check that there are enough episodes
-            stats = self.storage.get_statistics(project_name)
-            total_episodes = stats['total_episodes']
-
-            if total_episodes < min_cluster_size:
-                return CallToolResult(
-                    content=[TextContent(
-                        type="text",
-                        text=json.dumps({
-                            "success": False,
-                            "message": f"Project '{project_name}' only has {total_episodes} episodes. "
-                                      f"At least {min_cluster_size} are needed to consolidate.",
-                            "total_episodes": total_episodes,
-                            "min_required": min_cluster_size
-                        }, indent=2, ensure_ascii=False)
-                    )]
-                )
-
-            # Run consolidation in thread pool to avoid blocking the event loop
-            consolidator = MemoryConsolidator(
-                storage=self.storage,
-                min_cluster_size=min_cluster_size
+            consolidator = MemoryConsolidator(storage=self.storage, min_cluster_size=min_cluster_size)
+            # Clustering + LLM calls are blocking: run them off the event loop
+            meta_memories = await asyncio.wait_for(
+                asyncio.to_thread(consolidator.consolidate_project, project_name, force),
+                timeout=CONSOLIDATION_TIMEOUT_SECONDS,
             )
-
-            # Use ThreadPoolExecutor for synchronous LLM operations
-            loop = asyncio.get_event_loop()
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                try:
-                    # Timeout of 120 seconds (may take time with several clusters)
-                    meta_memories = await asyncio.wait_for(
-                        loop.run_in_executor(
-                            executor,
-                            consolidator.consolidate_project,
-                            project_name
-                        ),
-                        timeout=120.0
-                    )
-                except asyncio.TimeoutError:
-                    return CallToolResult(
-                        content=[TextContent(
-                            type="text",
-                            text=json.dumps({
-                                "success": False,
-                                "message": "Consolidation exceeded the time limit (120s). "
-                                          "This may happen with many episodes or a slow LLM connection.",
-                                "suggestion": "Try a larger min_cluster_size to reduce clusters"
-                            }, indent=2, ensure_ascii=False)
-                        )],
-                        isError=True
-                    )
-
-            if not meta_memories:
-                return CallToolResult(
-                    content=[TextContent(
-                        type="text",
-                        text=json.dumps({
-                            "success": False,
-                            "message": "No clusters large enough to consolidate were found. "
-                                      "Try a smaller min_cluster_size.",
-                            "total_episodes": total_episodes,
-                            "min_cluster_size": min_cluster_size,
-                            "suggestion": "Episodes may be too semantically diverse"
-                        }, indent=2, ensure_ascii=False)
-                    )]
-                )
-
-            # Summary of generated meta-memories
-            result = {
-                "success": True,
-                "message": f"Consolidation completed! {len(meta_memories)} meta-memories generated.",
-                "meta_memories_generated": len(meta_memories),
-                "episodes_consolidated": sum(mm.episode_count for mm in meta_memories),
-                "meta_memories": [
-                    {
-                        "id": str(mm.id),
-                        "pattern": mm.pattern_summary,
-                        "lessons_count": len(mm.lessons),
-                        "best_practices_count": len(mm.best_practices),
-                        "episode_count": mm.episode_count,
-                        "confidence": f"{mm.confidence:.0%}",
-                        "technologies": mm.technologies
-                    }
-                    for mm in meta_memories
-                ]
-            }
-
-            return CallToolResult(
-                content=[TextContent(
-                    type="text",
-                    text=json.dumps(result, indent=2, ensure_ascii=False)
-                )]
-            )
-
+        except asyncio.TimeoutError:
+            return _json_result({
+                "success": False,
+                "message": (
+                    f"Consolidation exceeded the time limit ({CONSOLIDATION_TIMEOUT_SECONDS:.0f}s). "
+                    "It keeps running in the background; results will appear in later queries."
+                ),
+                "suggestion": "Try a larger min_cluster_size to reduce the number of clusters"
+            }, is_error=True)
         except Exception as e:
-            logger.error(f"Error in consolidation: {e}")
-            return CallToolResult(
-                content=[TextContent(
-                    type="text",
-                    text=f"Error during consolidation: {str(e)}"
-                )],
-                isError=True
-            )
+            logger.error("Error in consolidation: %s", e)
+            return _text_result(f"Error during consolidation: {e}", is_error=True)
+
+        if not meta_memories:
+            return _json_result({
+                "success": False,
+                "message": (
+                    "No new clusters large enough to consolidate were found. "
+                    "Try a smaller min_cluster_size, or force=true to re-consolidate."
+                ),
+                "total_episodes": total_episodes,
+                "min_cluster_size": min_cluster_size,
+                "suggestion": "Episodes may be too semantically diverse or already consolidated"
+            })
+
+        return _json_result({
+            "success": True,
+            "message": f"Consolidation completed! {len(meta_memories)} meta-memories generated.",
+            "meta_memories_generated": len(meta_memories),
+            "episodes_consolidated": sum(mm.episode_count for mm in meta_memories),
+            "meta_memories": [
+                {
+                    "id": str(mm.id),
+                    "pattern": mm.pattern_summary,
+                    "lessons_count": len(mm.lessons),
+                    "best_practices_count": len(mm.best_practices),
+                    "episode_count": mm.episode_count,
+                    "confidence": f"{mm.confidence:.0%}",
+                    "technologies": mm.technologies
+                }
+                for mm in meta_memories
+            ]
+        })
 
     async def _mark_episode(self, args: dict) -> CallToolResult:
         """
         Mark an episode with special flags (antipattern, critical, superseded, deprecated).
         """
         episode_id = args.get("episode_id")
-        is_antipattern = args.get("is_antipattern")
-        is_critical = args.get("is_critical")
-        superseded_by = args.get("superseded_by")
-        deprecation_reason = args.get("deprecation_reason")
-
         if not episode_id:
-            return CallToolResult(
-                content=[TextContent(
-                    type="text",
-                    text="Error: episode_id is required"
-                )],
-                isError=True
-            )
+            return _text_result("Error: episode_id is required", is_error=True)
 
-        # Get current episode
         episode = self.storage.get_episode_by_id(episode_id)
         if not episode:
-            return CallToolResult(
-                content=[TextContent(
-                    type="text",
-                    text=f"Error: Episode not found with ID {episode_id}"
-                )],
-                isError=True
-            )
+            return _text_result(f"Error: Episode not found with ID {episode_id}", is_error=True)
 
-        # Update flags
-        updates = {}
-        if is_antipattern is not None:
-            updates["is_antipattern"] = is_antipattern
-        if is_critical is not None:
-            updates["is_critical"] = is_critical
-        if superseded_by is not None:
-            updates["superseded_by"] = superseded_by
-        if deprecation_reason is not None:
-            updates["deprecation_reason"] = deprecation_reason
+        updates = {
+            field: args[field]
+            for field in ("is_antipattern", "is_critical", "superseded_by", "deprecation_reason")
+            if args.get(field) is not None
+        }
 
         if not updates:
-            return CallToolResult(
-                content=[TextContent(
-                    type="text",
-                    text="No changes specified (is_antipattern or is_critical)"
-                )],
-                isError=True
+            return _text_result(
+                "No changes specified. Provide at least one of: "
+                "is_antipattern, is_critical, superseded_by, deprecation_reason",
+                is_error=True
             )
 
-        # Apply updates
-        success = self.storage.update_episode_flags(episode_id, updates)
+        # superseded_by is parsed back into a UUID on every read: reject bad values upfront
+        if "superseded_by" in updates:
+            try:
+                updates["superseded_by"] = str(UUID(str(updates["superseded_by"])))
+            except ValueError:
+                return _text_result(
+                    f"Error: superseded_by must be an episode UUID, got '{updates['superseded_by']}'",
+                    is_error=True
+                )
 
-        if success:
-            result = {
-                "success": True,
-                "episode_id": episode_id,
-                "task": episode.task,
-                "updates_applied": updates,
-                "message": ""
-            }
-            if updates.get("is_antipattern"):
-                result["message"] = (
-                    "Episode marked as ANTIPATTERN. "
-                    "It will be shown as a warning in future relevant queries."
-                )
-            if updates.get("is_critical"):
-                result["message"] += (
-                    "Episode marked as CRITICAL. "
-                    "It will be prioritized in searches."
-                )
-            return CallToolResult(
-                content=[TextContent(
-                    type="text",
-                    text=json.dumps(result, indent=2, ensure_ascii=False)
-                )]
+        if not self.storage.update_episode_flags(episode_id, updates):
+            return _text_result(f"Error updating episode {episode_id}", is_error=True)
+
+        messages = []
+        if updates.get("is_antipattern"):
+            messages.append(
+                "Episode marked as ANTIPATTERN. It will be shown as a warning in future relevant queries."
             )
-        else:
-            return CallToolResult(
-                content=[TextContent(
-                    type="text",
-                    text=f"Error updating episode {episode_id}"
-                )],
-                isError=True
-            )
+        if updates.get("is_critical"):
+            messages.append("Episode marked as CRITICAL. It will be prioritized in searches.")
+        if "superseded_by" in updates:
+            messages.append(f"Episode superseded by {updates['superseded_by']}.")
+
+        return _json_result({
+            "success": True,
+            "episode_id": episode_id,
+            "task": episode.task,
+            "updates_applied": updates,
+            "message": " ".join(messages) or "Episode updated."
+        })
 
     async def _check_consolidation_status(self, args: dict) -> CallToolResult:
         """
@@ -1489,11 +839,8 @@ class MemoryTwinMCPServer:
 
         Analyzes episode access_count and number of unconsolidated episodes.
         """
-        project_name = args.get("project_name")
+        status = self.storage.check_consolidation_needed(args.get("project_name"))
 
-        status = self.storage.check_consolidation_needed(project_name)
-
-        # Add readable recommendation
         if status["should_consolidate"]:
             status["recommendation"] = (
                 "CONSOLIDATION RECOMMENDED: "
@@ -1509,12 +856,7 @@ class MemoryTwinMCPServer:
                 "The system will work well with individual episodes for now."
             )
 
-        return CallToolResult(
-            content=[TextContent(
-                type="text",
-                text=json.dumps(status, indent=2, ensure_ascii=False)
-            )]
-        )
+        return _json_result(status)
 
     async def run(self):
         """Run the MCP server."""
@@ -1527,15 +869,24 @@ class MemoryTwinMCPServer:
             )
 
 
+def _configure_logging() -> None:
+    """Send logs to stderr: stdout carries the MCP JSON-RPC stream."""
+    logging.basicConfig(
+        level=logging.INFO,
+        stream=sys.stderr,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+
 async def _async_main():
     """Async entry point for the MCP server."""
+    _configure_logging()
     server = MemoryTwinMCPServer()
     await server.run()
 
 
 def main():
     """Synchronous entry point for console scripts."""
-    import asyncio
     asyncio.run(_async_main())
 
 

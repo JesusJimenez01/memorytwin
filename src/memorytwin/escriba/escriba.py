@@ -6,6 +6,7 @@ Coordinates the processing and storage of
 technical memory episodes.
 """
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -14,9 +15,10 @@ from rich.panel import Panel
 
 from memorytwin.escriba.processor import ThoughtProcessor
 from memorytwin.escriba.storage import MemoryStorage
-from memorytwin.models import Episode, ProcessedInput
+from memorytwin.models import Episode, MemoryQuery, ProcessedInput
 
-console = Console()
+# Status output goes to stderr so it never corrupts the MCP stdio protocol
+console = Console(stderr=True)
 
 
 class Escriba:
@@ -103,7 +105,7 @@ class Escriba:
         console.print(Panel(
             f"[bold green]✓ Episode captured[/bold green]\n"
             f"ID: {episode_id}\n"
-            f"Task: {episode.task[:100]}...\n"
+            f"Task: {episode.task[:100]}\n"
             f"Type: {episode.episode_type.value}\n"
             f"Tags: {', '.join(episode.tags[:5])}",
             title="Memory Registered",
@@ -121,7 +123,6 @@ class Escriba:
         project_name: Optional[str] = None
     ) -> Episode:
         """Synchronous version of capture_thinking."""
-        import asyncio
         return asyncio.run(
             self.capture_thinking(
                 thinking_text,
@@ -173,8 +174,6 @@ class Escriba:
         Returns:
             List of search results
         """
-        from memorytwin.models import MemoryQuery
-
         memory_query = MemoryQuery(
             query=query,
             project_filter=self.project_name,

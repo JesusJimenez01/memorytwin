@@ -57,8 +57,8 @@ def compute_hybrid_score(
     importance = episode.importance_score
 
     # 3. Apply modifiers for is_critical and is_antipattern
-    critical_modifier = CRITICAL_BOOST if getattr(episode, 'is_critical', False) else 1.0
-    antipattern_modifier = ANTIPATTERN_PENALTY if getattr(episode, 'is_antipattern', False) else 1.0
+    critical_modifier = CRITICAL_BOOST if episode.is_critical else 1.0
+    antipattern_modifier = ANTIPATTERN_PENALTY if episode.is_antipattern else 1.0
 
     # 4. Calculate final score
     final_score = semantic_score * boost * importance * critical_modifier * antipattern_modifier

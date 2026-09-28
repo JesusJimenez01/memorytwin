@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 
 class TestSettings:
     """Tests for the Settings class."""
@@ -21,8 +23,7 @@ class TestSettings:
         env_vars_to_clear = [
             'LLM_PROVIDER', 'LLM_MODEL', 'LLM_TEMPERATURE',
             'GOOGLE_API_KEY', 'OPENROUTER_API_KEY',
-            'MCP_SERVER_HOST', 'MCP_SERVER_PORT',
-            'GRADIO_SERVER_PORT', 'GRADIO_SHARE', 'EMBEDDING_MODEL'
+            'GRADIO_SERVER_NAME', 'GRADIO_SERVER_PORT', 'GRADIO_SHARE', 'EMBEDDING_MODEL'
         ]
         saved_env = {k: os.environ.pop(k, None) for k in env_vars_to_clear}
 
@@ -32,8 +33,7 @@ class TestSettings:
                 _env_file=None  # Don't load any .env
             )
 
-            assert settings.mcp_server_host == "localhost"
-            assert settings.mcp_server_port == 8765
+            assert settings.gradio_server_name == "127.0.0.1"
             assert settings.gradio_server_port == 7860
             assert settings.gradio_share is False
             assert settings.llm_provider == "openrouter"
@@ -89,16 +89,6 @@ class TestGetSettings:
 class TestPathFunctions:
     """Tests for path functions."""
 
-    def test_get_data_dir_exists(self, tmp_path):
-        """Test that get_data_dir creates the directory."""
-        from memorytwin.config import get_data_dir
-
-        data_dir = get_data_dir()
-
-        assert isinstance(data_dir, Path)
-        # The directory must exist (created if it doesn't exist)
-        assert data_dir.exists()
-
     def test_get_chroma_dir_exists(self, tmp_path):
         """Test that get_chroma_dir creates the directory."""
         from memorytwin.config import get_chroma_dir
@@ -121,21 +111,14 @@ class TestPathFunctions:
 class TestSettingsWithEnvVars:
     """Tests for configuration with environment variables."""
 
-    def test_settings_from_env_mcp_port(self):
-        """Test for configuration from environment variable."""
-        with patch.dict(os.environ, {"MCP_SERVER_PORT": "9999"}):
-            from importlib import reload
+    def test_settings_gradio_port_from_env(self):
+        """Test that GRADIO_SERVER_PORT is read from the environment."""
+        with patch.dict(os.environ, {"GRADIO_SERVER_PORT": "9999"}):
+            from memorytwin.config import Settings
 
-            import memorytwin.config as config_module
+            settings = Settings()
 
-            # Clear cache
-            config_module.get_settings.cache_clear()
-
-            # Re-import to get new values
-            reload(config_module)
-
-            # Verify that it can be changed
-            assert True  # El test verifica que no hay errores
+            assert settings.gradio_server_port == 9999
 
     def test_settings_gradio_share_true(self):
         """Test for GRADIO_SHARE=true."""
@@ -228,3 +211,36 @@ class TestOpenRouterJsonFallback:
         second_call_kwargs = async_create.call_args_list[1].kwargs
         assert first_call_kwargs["response_format"] == {"type": "json_object"}
         assert "response_format" not in second_call_kwargs
+
+
+class TestParseJsonResponse:
+    """Tests for the LLM JSON response parser."""
+
+    def test_plain_json(self):
+        from memorytwin.config import parse_json_response
+
+        assert parse_json_response('{"a": 1}') == {"a": 1}
+
+    def test_json_in_code_fence(self):
+        from memorytwin.config import parse_json_response
+
+        text = '```json\n{"pattern": "retry", "lessons": ["x"]}\n```'
+        assert parse_json_response(text) == {"pattern": "retry", "lessons": ["x"]}
+
+    def test_json_surrounded_by_prose(self):
+        from memorytwin.config import parse_json_response
+
+        text = 'Sure! Here is the result: {"task": "t"} Hope it helps.'
+        assert parse_json_response(text) == {"task": "t"}
+
+    def test_invalid_json_raises(self):
+        from memorytwin.config import parse_json_response
+
+        with pytest.raises(ValueError):
+            parse_json_response("no json here")
+
+    def test_non_object_json_raises(self):
+        from memorytwin.config import parse_json_response
+
+        with pytest.raises(ValueError):
+            parse_json_response("[1, 2, 3]")

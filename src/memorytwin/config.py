@@ -7,11 +7,13 @@ Supports multiple LLM providers:
 - openrouter: OpenRouter (access to multiple models)
 """
 
+import json
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from dotenv import load_dotenv
 from pydantic import Field
@@ -35,11 +37,8 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = Field(default="./data/chroma")
     sqlite_db_path: str = Field(default="./data/memory.db")
 
-    # MCP Server
-    mcp_server_host: str = Field(default="localhost")
-    mcp_server_port: int = Field(default=8765)
-
-    # Gradio
+    # Gradio (bound to localhost by default: the UI can delete episodes)
+    gradio_server_name: str = Field(default="127.0.0.1")
     gradio_server_port: int = Field(default=7860)
     gradio_share: bool = Field(default=False)
 
@@ -51,9 +50,6 @@ class Settings(BaseSettings):
 
     # Embedding Config
     embedding_model: str = Field(default="all-MiniLM-L6-v2")
-
-    # Project
-    project_root: Path = Path(__file__).parent.parent.parent.parent
 
     model_config = {
         "env_file": ".env",
@@ -68,13 +64,6 @@ def get_settings() -> Settings:
 
 
 # Important paths
-def get_data_dir() -> Path:
-    """Get data directory."""
-    data_dir = get_settings().project_root / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    return data_dir
-
-
 def get_chroma_dir() -> Path:
     """Get ChromaDB directory."""
     chroma_dir = Path(get_settings().chroma_persist_dir)
@@ -92,6 +81,7 @@ def get_sqlite_path() -> Path:
 # =============================================================================
 # UNIFIED LLM ABSTRACTION
 # =============================================================================
+
 
 @dataclass
 class LLMResponse:
@@ -201,26 +191,28 @@ class OpenRouterClient(BaseLLMClient):
             or "json_object" in message
         )
 
+    def _completion_kwargs(self, messages: list[dict], json_mode: bool) -> dict[str, Any]:
+        """Build chat.completions.create kwargs, adding response_format only when JSON is requested."""
+        kwargs: dict[str, Any] = {
+            "model": self._model_name,
+            "messages": messages,
+            "temperature": self._temperature,
+            "max_tokens": self._max_tokens,
+        }
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        return kwargs
+
     def generate(self, prompt: str) -> LLMResponse:
         """Generate synchronous response."""
+        messages = [{"role": "user", "content": prompt}]
         try:
-            response = self._client.chat.completions.create(
-                model=self._model_name,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=self._temperature,
-                max_tokens=self._max_tokens,
-                response_format={"type": "json_object"} if self._json_mode else None,
-            )
+            response = self._client.chat.completions.create(**self._completion_kwargs(messages, self._json_mode))
         except Exception as exc:
-            if self._json_mode and self._is_json_mode_unsupported_error(exc):
-                response = self._client.chat.completions.create(
-                    model=self._model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=self._temperature,
-                    max_tokens=self._max_tokens,
-                )
-            else:
+            if not (self._json_mode and self._is_json_mode_unsupported_error(exc)):
                 raise
+            # Some models reject JSON mode: retry without it and rely on the prompt instead
+            response = self._client.chat.completions.create(**self._completion_kwargs(messages, False))
         return LLMResponse(text=response.choices[0].message.content or "")
 
     async def generate_async(self, messages: list[dict]) -> LLMResponse:
@@ -238,23 +230,43 @@ class OpenRouterClient(BaseLLMClient):
 
         try:
             response = await self._async_client.chat.completions.create(
-                model=self._model_name,
-                messages=openai_messages,
-                temperature=self._temperature,
-                max_tokens=self._max_tokens,
-                response_format={"type": "json_object"} if self._json_mode else None,
+                **self._completion_kwargs(openai_messages, self._json_mode)
             )
         except Exception as exc:
-            if self._json_mode and self._is_json_mode_unsupported_error(exc):
-                response = await self._async_client.chat.completions.create(
-                    model=self._model_name,
-                    messages=openai_messages,
-                    temperature=self._temperature,
-                    max_tokens=self._max_tokens,
-                )
-            else:
+            if not (self._json_mode and self._is_json_mode_unsupported_error(exc)):
                 raise
+            response = await self._async_client.chat.completions.create(
+                **self._completion_kwargs(openai_messages, False)
+            )
         return LLMResponse(text=response.choices[0].message.content or "")
+
+
+def parse_json_response(text: str) -> dict:
+    """
+    Parse a JSON object from an LLM response.
+
+    Models do not always honour JSON mode: the object may come wrapped in
+    Markdown code fences or surrounded by extra prose. This helper tries a
+    strict parse first and then falls back to the outermost ``{...}`` block.
+
+    Raises:
+        ValueError: If no valid JSON object can be extracted.
+    """
+    cleaned = text.strip()
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = re.search(r"\{[\s\S]*\}", cleaned)
+        if not match:
+            raise ValueError("LLM did not return valid JSON") from None
+        try:
+            data = json.loads(match.group())
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"LLM did not return valid JSON: {exc}") from exc
+
+    if not isinstance(data, dict):
+        raise ValueError("LLM response is not a JSON object")
+    return data
 
 
 # =============================================================================

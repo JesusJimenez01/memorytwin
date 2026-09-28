@@ -10,6 +10,9 @@ Features:
 4. View system statistics
 """
 
+import inspect
+import logging
+from typing import Optional
 
 import gradio as gr
 import pandas as pd
@@ -18,32 +21,52 @@ from memorytwin.config import get_settings
 from memorytwin.escriba import MemoryStorage
 from memorytwin.oraculo import RAGEngine
 
+logger = logging.getLogger(__name__)
+
+ALL_PROJECTS = "(All)"
+EPISODE_COLUMNS = ["ID", "Date", "Project", "Task", "Type", "Antipattern", "Critical"]
+
 # Singleton instances
 _rag_engine = None
 _storage = None
 
-def get_rag_engine():
+
+def get_rag_engine() -> RAGEngine:
+    """Shared RAG engine (created on first use)."""
     global _rag_engine
     if _rag_engine is None:
-        _rag_engine = RAGEngine()
+        _rag_engine = RAGEngine(storage=get_storage())
     return _rag_engine
 
-def get_storage():
+
+def get_storage() -> MemoryStorage:
+    """Shared storage instance (created on first use)."""
     global _storage
     if _storage is None:
         _storage = MemoryStorage()
     return _storage
 
+
+def _project_filter(project_name: Optional[str]) -> Optional[str]:
+    """Translate the dropdown value into a storage filter (None = all projects)."""
+    if not project_name or project_name == ALL_PROJECTS:
+        return None
+    return project_name.strip()
+
+
 # --- Logic Functions ---
+
 
 def get_available_projects() -> list[str]:
     """Get list of available projects from storage."""
     try:
         storage = get_storage()
         projects = storage.get_all_projects()
-        return ["(All)"] + projects
-    except Exception:
-        return ["(All)"]
+        return [ALL_PROJECTS] + projects
+    except Exception as e:
+        logger.warning("Could not list projects: %s", e)
+        return [ALL_PROJECTS]
+
 
 def answer_question(question: str, project_name: str = "", num_episodes: int = 5) -> str:
     """Answer a question using RAG over memory episodes."""
@@ -52,17 +75,18 @@ def answer_question(question: str, project_name: str = "", num_episodes: int = 5
 
     try:
         rag = get_rag_engine()
-        project = None if project_name in ["", "(All)"] else project_name.strip()
-        response = rag.query_sync(question, project_name=project, top_k=num_episodes)
+        project = _project_filter(project_name)
+        response = rag.query_sync(question, project_name=project, top_k=int(num_episodes))
         return response["answer"]
     except Exception as e:
         return f"❌ Error processing the question: {str(e)}"
+
 
 def get_timeline_markdown(project_name: str = "", limit: int = 20) -> str:
     """Get timeline of episodes formatted as Markdown."""
     try:
         storage = get_storage()
-        project = None if project_name in ["", "(All)"] else project_name.strip()
+        project = _project_filter(project_name)
         episodes = storage.get_timeline(project_name=project, limit=limit)
 
         if not episodes:
@@ -102,11 +126,12 @@ def get_timeline_markdown(project_name: str = "", limit: int = 20) -> str:
     except Exception as e:
         return f"❌ Error getting timeline: {str(e)}"
 
+
 def get_lessons_markdown(project_name: str = "") -> str:
     """Get aggregated lessons learned formatted as Markdown."""
     try:
         storage = get_storage()
-        project = None if project_name in ["", "(All)"] else project_name.strip()
+        project = _project_filter(project_name)
         lessons = storage.get_lessons_learned(project_name=project)
 
         if not lessons:
@@ -131,11 +156,12 @@ def get_lessons_markdown(project_name: str = "") -> str:
     except Exception as e:
         return f"❌ Error getting lessons: {str(e)}"
 
+
 def get_statistics_markdown(project_name: str = "") -> str:
     """Get memory statistics formatted as Markdown."""
     try:
         storage = get_storage()
-        project = None if project_name in ["", "(All)"] else project_name.strip()
+        project = _project_filter(project_name)
         stats = storage.get_statistics(project_name=project)
 
         if stats.get('total_episodes', 0) == 0:
@@ -164,11 +190,12 @@ def get_statistics_markdown(project_name: str = "") -> str:
     except Exception as e:
         return f"❌ Error getting statistics: {str(e)}"
 
+
 def get_episodes_dataframe(project_name: str = "", limit: int = 50) -> pd.DataFrame:
     """Get episodes as a DataFrame for the management tab."""
     try:
         storage = get_storage()
-        project = None if project_name in ["", "(All)"] else project_name.strip()
+        project = _project_filter(project_name)
         episodes = storage.get_timeline(project_name=project, limit=limit)
 
         data = []
@@ -183,13 +210,11 @@ def get_episodes_dataframe(project_name: str = "", limit: int = 50) -> pd.DataFr
                 "Critical": "⭐" if ep.is_critical else ""
             })
 
-        if not data:
-            return pd.DataFrame(columns=["ID", "Date", "Project", "Task", "Type", "Antipattern", "Critical"])
-
-        return pd.DataFrame(data)
+        return pd.DataFrame(data, columns=EPISODE_COLUMNS)
     except Exception as e:
-        print(f"Error getting dataframe: {e}")
-        return pd.DataFrame(columns=["Error"])
+        logger.error("Error getting episodes table: %s", e)
+        return pd.DataFrame(columns=EPISODE_COLUMNS)
+
 
 def delete_episode_action(episode_id: str) -> str:
     """Delete an episode by ID."""
@@ -208,18 +233,13 @@ def delete_episode_action(episode_id: str) -> str:
 
 # --- UI Construction ---
 
+
 def create_gradio_interface():
     """Create the Gradio interface with a modern theme."""
 
-    theme = gr.themes.Soft(
-        primary_hue="indigo",
-        secondary_hue="slate",
-        neutral_hue="slate",
-        font=["Inter", "sans-serif"]
-    )
-
     with gr.Blocks(title="Memory Twin - Oráculo") as app:
-        app.theme = theme
+        # Gradio < 6 reads the theme from the Blocks object (>= 6 takes it in launch())
+        app.theme = _build_theme()
 
         gr.Markdown("# 🧠 Memory Twin | Oráculo")
         gr.Markdown("Episodic Memory System for AI Assistants", elem_classes=["text-center"])
@@ -245,7 +265,7 @@ def create_gradio_interface():
                             project_input = gr.Dropdown(
                                 label="Filter by Project",
                                 choices=projects,
-                                value="(All)",
+                                value=ALL_PROJECTS,
                                 interactive=True
                             )
                             num_episodes = gr.Slider(
@@ -281,15 +301,15 @@ def create_gradio_interface():
                         manage_project = gr.Dropdown(
                             label="Filter Project",
                             choices=projects,
-                            value="(All)",
+                            value=ALL_PROJECTS,
                             interactive=True
                         )
                     with gr.Column(scale=1):
                         refresh_btn = gr.Button("🔄 Refresh Table")
 
                 episodes_table = gr.Dataframe(
-                    headers=["ID", "Date", "Project", "Task", "Type", "Antipattern", "Critical"],
-                    datatype=["str", "str", "str", "str", "str", "str", "str"],
+                    headers=EPISODE_COLUMNS,
+                    datatype=["str"] * len(EPISODE_COLUMNS),
                     interactive=False,
                     label="Recent Episodes",
                     wrap=True
@@ -316,7 +336,6 @@ def create_gradio_interface():
                     outputs=episodes_table
                 )
 
-                # Also load on tab select (simulated by loading on launch/change)
                 manage_project.change(
                     fn=get_episodes_dataframe,
                     inputs=[manage_project],
@@ -340,7 +359,7 @@ def create_gradio_interface():
                     timeline_project = gr.Dropdown(
                         label="Project",
                         choices=projects,
-                        value="(All)",
+                        value=ALL_PROJECTS,
                         interactive=True
                     )
                     timeline_limit = gr.Slider(
@@ -365,7 +384,7 @@ def create_gradio_interface():
                     lessons_project = gr.Dropdown(
                         label="Project",
                         choices=projects,
-                        value="(All)",
+                        value=ALL_PROJECTS,
                         interactive=True
                     )
                     lessons_btn = gr.Button("View Lessons Learned", variant="secondary")
@@ -383,7 +402,7 @@ def create_gradio_interface():
                     stats_project = gr.Dropdown(
                         label="Project",
                         choices=projects,
-                        value="(All)",
+                        value=ALL_PROJECTS,
                         interactive=True
                     )
                     stats_btn = gr.Button("View Statistics", variant="secondary")
@@ -395,19 +414,40 @@ def create_gradio_interface():
                     outputs=stats_output
                 )
 
+        # Populate the management table as soon as the page opens
+        app.load(fn=get_episodes_dataframe, inputs=[manage_project], outputs=episodes_table)
+
     return app
+
+
+def _build_theme():
+    """Visual theme shared by every tab."""
+    return gr.themes.Soft(
+        primary_hue="indigo",
+        secondary_hue="slate",
+        neutral_hue="slate",
+        font=["Inter", "sans-serif"]
+    )
+
 
 def main():
     """Main entry point."""
     settings = get_settings()
     app = create_gradio_interface()
-    print(f"🚀 Starting Oráculo at http://0.0.0.0:{settings.gradio_server_port}")
-    app.launch(
-        server_name="0.0.0.0",
-        server_port=settings.gradio_server_port,
-        share=False,
-        show_error=True
-    )
+
+    launch_kwargs = {
+        # Localhost by default: the Management tab can delete episodes and has no auth
+        "server_name": settings.gradio_server_name,
+        "server_port": settings.gradio_server_port,
+        "share": settings.gradio_share,
+        "show_error": True,
+    }
+    if "theme" in inspect.signature(app.launch).parameters:
+        launch_kwargs["theme"] = _build_theme()
+
+    print(f"🚀 Starting Oráculo at http://{settings.gradio_server_name}:{settings.gradio_server_port}")
+    app.launch(**launch_kwargs)
+
 
 if __name__ == "__main__":
     main()

@@ -47,8 +47,8 @@ class TestThoughtProcessor:
             "context": "REST API with FastAPI",
             "reasoning_trace": {
                 "raw_thinking": "I chose JWT for scalability",
-                "alternatives_considered": ["Sessions con Redis"],
-                "decision_factors": ["Stateless", "Escalabilidad"],
+                "alternatives_considered": ["Sessions with Redis"],
+                "decision_factors": ["Stateless", "Scalability"],
                 "confidence_level": 0.85
             },
             "solution": "from jose import jwt",
