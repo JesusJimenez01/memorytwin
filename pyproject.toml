@@ -90,9 +90,6 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
 
-[tool.ruff.lint.per-file-ignores]
-"src/memorytwin/escriba/cli.py" = ["E402", "E501"]
-
 [tool.coverage.run]
 source = ["src/memorytwin"]
 omit = [
