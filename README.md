@@ -1,372 +1,311 @@
 # Memory Twin
 
-## Overview
+[![CI](https://github.com/JesusJimenez01/memorytwin/actions/workflows/ci.yml/badge.svg)](https://github.com/JesusJimenez01/memorytwin/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
+![MCP](https://img.shields.io/badge/protocol-MCP-8A2BE2)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Memory Twin is an **intelligent episodic memory system** that integrates with your AI assistant (Copilot, Cursor, Claude) to prevent "technical amnesia." It uses **large language models (LLMs)** and **vector databases** to capture, structure, and retrieve the reasoning behind every code decision, enabling your team to learn from past mistakes and automatically reuse successful solutions.
+**Episodic memory for AI coding assistants.** Memory Twin captures the *reasoning* behind every
+technical decision your assistant makes (alternatives considered, trade-offs, lessons learned),
+stores it as searchable memory, and serves it back through the **Model Context Protocol (MCP)**,
+so Copilot, Cursor or Claude stop repeating past mistakes and re-discussing settled decisions.
 
-## Recruiter Snapshot
-
-**Portfolio Positioning**: Secondary project (advanced AI/backend tooling), not a business-facing flagship product.
-
-**What this project demonstrates**:
-- End-to-end AI engineering: LLM structuring + embeddings + RAG + MCP integration.
-- Software engineering fundamentals: modular architecture, test suite, CI checks, packaging, and CLI UX.
-- Practical trade-off thinking: latency/cost/hallucination mitigation and fallback behavior design.
-
-**Evidence in this repository**:
-- Automated CI pipeline: lint + tests ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
-- Broad automated test coverage by module (120 tests passing in local validation).
-- Runnable local system with CLI, MCP server, and optional UI.
-
-**Scope honesty**:
-- This is an engineering portfolio project in **alpha stage**.
-- It proves technical depth and implementation quality; it is not positioned as a production SaaS with external customer metrics.
+> AI assistants have no memory between sessions. Teams lose the *why* behind their code.
+> Memory Twin turns that reasoning into a queryable knowledge base: **technical amnesia, solved.**
 
 ---
 
-## Public Observability Trace (Course Deliverable)
+## Highlights
 
-To satisfy the course requirement for monitored, public traces, this repository includes a public Langfuse trace:
-
-- **Langfuse Public Trace**: [View trace](https://cloud.langfuse.com/project/cmiq9jkds005rad065xzlt8p8/traces/650709800524916eb6c18deffdc35fa4?timestamp=2025-12-10T01:41:30.876Z)
-
-> This link is provided as evidence of real instrumentation in a running flow, aligned with the class deliverables.
+- **End-to-end LLM system**: LLM structuring → local embeddings → vector search with hybrid
+  re-ranking → RAG answers, exposed as 14 MCP tools, a CLI and a web UI.
+- **Memory that behaves like memory**: frequently recalled episodes are reinforced, critical
+  decisions are boosted, known anti-patterns are surfaced as **warnings** before you repeat them,
+  and related episodes are *consolidated* into higher-level "meta-memories" (DBSCAN + LLM synthesis).
+- **Graceful degradation by design**: with no API key or with the LLM down, MCP captures are still
+  stored and every retrieval tool keeps working, returning the relevant memories instead of an error.
+- **Production-minded engineering**: typed Pydantic models, provider-agnostic LLM layer
+  (OpenRouter / Gemini), retries with exponential backoff, optional Langfuse tracing,
+  170+ tests with a coverage gate, lint and pre-commit hooks, CI on Python 3.11 and 3.12.
 
 ---
 
-## Natural Language Processing (NLP) Pipeline
+## How It Works
 
-At the core of Memory Twin is a sophisticated NLP pipeline designed to transform unstructured text (AI thinking) into queryable knowledge.
+Memory Twin is split into two agents that share a dual storage backend:
 
-### Processing Pipeline
+- **Escriba** (the scribe) ingests raw reasoning and turns it into structured *episodes*.
+- **Oráculo** (the oracle) retrieves, ranks and explains those memories on demand.
 
 ```mermaid
-graph TD
-    A[Input: Raw Thinking] -->|Structuring: LLM| B(JSON Episode)
-    B -->|Embedding: all-MiniLM| C[Vector Store: ChromaDB]
-    B -->|Storage| D[Metadata Store: SQLite]
-    C -->|Clustering: DBSCAN| E[Pattern Detection]
-    E -->|Synthesis: LLM| F[Meta-Memories]
-    G[User Query] -->|Embedding| H[Semantic Search]
-    H -->|RAG + Context| I[Oracle Response]
+flowchart LR
+    subgraph Clients
+        A[Copilot / Cursor / Claude<br/>via MCP]
+        B[CLI: mt]
+        C[Web UI: Gradio]
+    end
+
+    subgraph Escriba [Escriba · ingestion]
+        P[ThoughtProcessor<br/>LLM → JSON episode]
+        O[ProjectAnalyzer<br/>onboarding]
+    end
+
+    subgraph Oraculo [Oráculo · retrieval]
+        R[RAG engine]
+        S[Hybrid scoring]
+        K[Consolidator<br/>DBSCAN + LLM]
+    end
+
+    subgraph Storage
+        V[(ChromaDB<br/>embeddings)]
+        Q[(SQLite<br/>metadata)]
+    end
+
+    A & B & C --> P & R
+    O --> P
+    P -->|all-MiniLM-L6-v2| V
+    P --> Q
+    R --> S --> V
+    S --> Q
+    K --> V & Q
 ```
 
-### Models and Specifications
+### 1. Capture and structuring
 
-| Component | Model / Algorithm | Technical Specs | Function |
-|-----------|-------------------|-----------------|----------|
-| **Structuring** | `Configurable LLM` | Temp: 0.3, JSON Mode | Converts free text into structured JSON with a defined taxonomy. |
-| **Embeddings** | `all-MiniLM-L6-v2` | 384 dimensions, Max seq: 256 | Generates dense vector representations for semantic search. |
-| **Clustering** | `DBSCAN` | `eps=0.5`, `min_samples=3` | Groups similar episodes without requiring a predefined number of clusters. |
-| **Synthesis** | `Configurable LLM` | Temp: 0.4, Context Window: 1M | Consolidates episode clusters into "Meta-Memories" (lessons learned). |
-| **RAG** | Hybrid | Top-k: 5, Threshold: 0.7 | Semantic retrieval + metadata filtering (project, tags). |
+Free-form reasoning (or a structured `task / decision / reasoning` triple) is sent to an LLM with a
+strict JSON schema: task, context, alternatives considered, decision factors, solution, tags and
+lessons learned. The response is validated with Pydantic; malformed output (Markdown fences, extra
+prose) is recovered by a tolerant JSON parser, and transient API failures are retried with
+exponential backoff. If the LLM is unavailable, the MCP tools store a raw episode instead, so
+knowledge is never lost.
 
-### Implementation Details
+### 2. Embedding and storage
 
-1. **Embeddings & Semantic Similarity**:
-   We use `sentence-transformers/all-MiniLM-L6-v2` for its excellent speed/accuracy trade-off (14,200 sentences/sec). Similarity is calculated using **cosine distance** in a 384-dimensional space.
-   - *Relevance threshold*: Results with similarity < 0.4 are discarded to reduce hallucinations.
+Each episode is embedded locally with `sentence-transformers/all-MiniLM-L6-v2` (384 dimensions,
+CPU, no API cost) and written to two stores: **ChromaDB** for vector search and **SQLite**
+(SQLAlchemy) for the full record, flags and usage statistics.
 
-2. **RAG (Retrieval-Augmented Generation)**:
-   The `Oracle` engine goes beyond text search; it injects structured context into the system prompt.
-   - *Prompt Engineering*: A dynamic prompt prioritizes **Meta-Memories** (consolidated knowledge) over individual **Episodes** to provide more generalizable answers.
+### 3. Retrieval with hybrid scoring
 
-3. **Memory Clustering (Consolidation)**:
-   We implement a process inspired by human sleep consolidation.
-   - Distance matrices are computed between all unconsolidated episodes.
-   - `DBSCAN` identifies dense groups of similar decisions.
-   - The LLM analyzes each cluster and extracts: *Common Pattern*, *Lessons Learned*, and *Anti-patterns*.
-   - A `coherence_score` (0.0-1.0) is generated to validate clustering quality.
+Vector search over-fetches `3 × top_k` candidates and re-ranks them with:
+
+```
+score = cosine_similarity × (1 + 0.1 × access_count) × importance × modifiers
+          modifiers: critical ×1.5 · anti-pattern ×0.3
+```
+
+Every time an episode is retrieved its `access_count` grows, so knowledge that keeps proving useful
+is reinforced over time ("reinforcement without forgetting"). Anti-patterns are down-ranked in
+normal results but promoted to explicit **WARNINGS** when relevant to the current topic.
+
+### 4. Consolidation into meta-memories
+
+Inspired by memory consolidation during sleep: episodes of a project are clustered with **DBSCAN**
+over cosine distance (`eps=0.4`, `min_samples=3`, no need to guess the number of clusters, outliers
+stay as individual episodes). Each cluster is summarized by the LLM into a *meta-memory* with the
+common pattern, lessons, best practices and anti-patterns. Episodes already consolidated are skipped
+on later runs, and the system recommends consolidation automatically once an episode is recalled
+10+ times or 20+ episodes are pending.
+
+### 5. Context for the assistant
+
+`get_project_context` is the entry point agents call before answering. It returns, in priority
+order: relevant anti-pattern warnings → meta-memories → episodes (the whole memory while it is
+small, then the 5 most recent plus the 5 most relevant to the topic once it grows past 20 episodes).
+`query_memory` goes one step further and generates a grounded RAG answer that cites its sources.
 
 ---
 
-## Why NLP? Technology Comparison
+## Quick Start
 
-| Feature | Text Search (grep/SQL) | Keyword Search (Elasticsearch) | **Memory Twin (Semantic NLP)** |
-|---------|------------------------|-------------------------------|-------------------------------|
-| **Comprehension** | None (exact match only) | Low (basic synonyms) | **High** (understands intent and context) |
-| **Context** | Ignored | Limited | **Captured** (relationships between files and decisions) |
-| **Resilience** | Fails with typos/synonyms | Moderate | **High** (e.g., "auth" = "login" = "JWT") |
-| **Inference** | None | None | **Deduces** lessons and patterns |
-| **Latency** | < 1ms | ~10ms | ~200ms (acceptable for this use case) |
+### 1. Install
 
-### Where NLP Excels
-
-1. **Abstract Concept Search**: Querying "Why did we choose this architecture?" finds episodes about "system design", "patterns", "structure" -- even without the exact word "architecture."
-2. **Contradiction Detection**: The system can identify when "Solution A" in episode 5 contradicts the "Lesson Learned" in episode 20 -- impossible with regex.
-3. **Information Synthesis**: Instead of returning 10 raw logs, the system *reads* them and generates a coherent summary ("We tried X on 3 occasions and it failed because of Y").
-
-### Limitations and Trade-offs
-
-- **Latency**: Embedding generation and LLM inference add ~500ms-2s. *Mitigation*: Aggressive caching and async background processing.
-- **Cost**: Requires LLM API calls. *Mitigation*: Use of Flash models (very affordable) and local embeddings (zero cost).
-- **Hallucinations**: Inherent LLM risk. *Mitigation*: Strict RAG grounding and source citations in responses.
-
----
-
-## Installation
-
-Memory Twin is designed to be installed **once** on your system and used across **multiple projects**.
-
-### Recommended: `pipx` (Global)
-
-Ideal for using the CLI (`mt`) from anywhere without polluting virtual environments.
+Memory Twin is installed once and used across all your projects. Python 3.11+ is required.
 
 ```bash
-# 1. Install pipx (if you don't have it)
-python -m pip install --user pipx
-python -m pipx ensurepath
+# Recommended: isolated global install with pipx
+pipx install "git+https://github.com/JesusJimenez01/memorytwin.git"
 
-# 2. Install Memory Twin globally
-pipx install memorytwin
+# Optional extras: web UI and Langfuse tracing
+pipx install "memorytwin[ui,observability] @ git+https://github.com/JesusJimenez01/memorytwin.git"
 ```
 
-### Alternative: `venv` (Per project)
+### 2. Configure a project
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate  # or .venv\Scripts\activate on Windows
-pip install memorytwin
-```
-
-### With Web Interface (Optional)
-
-To use the graphical interface (`mt oraculo`), install the extra dependencies:
-
-```bash
-# With pipx
-pipx install "memorytwin[ui]"
-
-# With pip
-pip install "memorytwin[ui]"
-```
-
----
-
-## Quick Start (5 Minutes)
-
-### Step 1: Project Setup
-
-Navigate to your project folder (any language: Python, JS, Rust...) and initialize Memory Twin.
-
-```bash
-cd ~/my-awesome-project
+cd ~/my-project
 mt setup
 ```
 
-This creates a `data/` folder (gitignored) and a `.env` file.
+`mt setup` is non-destructive. It creates what is missing and merges what already exists:
 
-> **Note for existing projects**: `mt setup` is **safe** and will not overwrite your files.
-> - If you already have a `.gitignore`, the command will add the necessary rules automatically.
-> - If you already have a `.env`, it **will not be modified**: you'll need to manually add `GOOGLE_API_KEY` or `OPENROUTER_API_KEY`.
+| File | What happens |
+|------|--------------|
+| `AGENTS.md` | Instructions that teach your assistant to use the memory (kept if it already exists; `--force` overwrites) |
+| `.vscode/mcp.json` | Registers the `memorytwin` MCP server, preserving any other servers |
+| `.env` | Configuration template (never overwritten) |
+| `.gitignore` | Adds `.env` and `data/` if missing |
 
-### Step 2: Configuration
+Then add an LLM key to `.env` (OpenRouter offers free models):
 
-Open the generated `.env` file and configure your LLM provider.
-
-#### Option A: OpenRouter (recommended -- access to multiple free models)
 ```ini
-OPENROUTER_API_KEY=your_api_key_here
+OPENROUTER_API_KEY=your_key_here
 LLM_PROVIDER=openrouter
 LLM_MODEL=amazon/nova-2-lite-v1:free
+
+# or Google Gemini
+# GOOGLE_API_KEY=your_key_here
+# LLM_PROVIDER=google
+# LLM_MODEL=gemini-2.0-flash
 ```
 
-> **Recommended free models on OpenRouter** (Dec 2025):
-> - `amazon/nova-2-lite-v1:free` -- 1M context, fast
-> - `qwen/qwen3-coder:free` -- 262K context, excellent for code
-> - `tngtech/deepseek-r1t-chimera:free` -- 164K context, reasoning
+### 3. Use it
 
-#### Option B: Google Gemini
-```ini
-GOOGLE_API_KEY=your_api_key_here
-LLM_PROVIDER=google
-LLM_MODEL=gemini-2.0-flash
-```
+Reload VS Code and your assistant will call Memory Twin automatically:
 
-### Step 3: Visual Management (Oracle)
-
-To explore your memories visually, launch the web interface:
-
-```bash
-mt oraculo
-```
-
-This opens a dashboard in your browser where you can search, filter, and analyze your episodes.
-
-### Step 4: Start Using
-
-#### In VS Code (with Copilot/Cursor)
-
-Memory Twin connects automatically via the MCP protocol. Just talk to your assistant:
-
-> **User**: "@MemoryTwin Have we had authentication issues before?"
+> **You**: Have we had authentication issues before?
 >
-> **Copilot**: "Checking memories... Yes, in episode #42 we detected a race condition with JWT tokens. It was fixed by implementing a lock in the interceptor."
+> **Copilot**: *(calls `get_project_context(topic="authentication")`)* Yes. There is an
+> anti-pattern warning: storing JWTs in `localStorage` exposed them to XSS; the fix was moving
+> them to `httpOnly` cookies.
 
-#### From the Terminal (CLI)
-
-```bash
-# Save a quick thought
-mt capture "We decided to use FastAPI for its native async support"
-
-# Query the Oracle
-mt query "Why did we use FastAPI?"
-# -> "According to the episode from 10/12, it was chosen for async support..."
-
-# Open the web interface (requires pip install ".[ui]")
-mt oraculo
-```
-
----
-
-## Where Memories Are Stored
-
-Memory Twin respects the privacy and locality of your data.
-
-- **System Code**: Installed globally (e.g., `~/.local/pipx/venvs/memorytwin`).
-- **Your Memories**: Stored **locally** within each project.
-
-```text
-~/my-project/
-├── src/
-├── .env              <-- Your local configuration
-└── data/             <-- Your memories live HERE (don't delete!)
-    ├── memory.db     <-- Metadata and relationships (SQLite)
-    └── chroma/       <-- Vectors and embeddings (ChromaDB)
-```
-
-> **Note**: The `data/` folder is automatically added to `.gitignore` when running `mt setup`. Your secrets and memories are not pushed to the repo unless you choose to.
-
----
-
-## Available MCP Tools
-
-Memory Twin exposes 14 powerful tools for your AI assistant:
-
-| Tool | Description | Usage Example |
-|------|-------------|---------------|
-| `get_project_context` | **Critical**. Gets context, patterns, and warnings. | `get_project_context(topic="login")` |
-| `capture_thinking` | **Critical**. Saves reasoning as free text. | `capture_thinking(thinking_text="I chose X because...")` |
-| `capture_decision` | **Preferred**. Captures structured decisions. | `capture_decision(task="...", decision="...", reasoning="...")` |
-| `capture_quick` | **Quick**. Minimum effort (what + why). | `capture_quick(what="Added retry", why="Intermittent failures")` |
-| `query_memory` | Query the Oracle using RAG. | `query_memory(question="How did we fix bug X?")` |
-| `search_episodes` | Semantic search of episodes by topic. | `search_episodes(query="authentication", top_k=5)` |
-| `get_episode` | Retrieves the full content of an episode. | `get_episode(episode_id="uuid-of-episode")` |
-| `get_timeline` | Shows the chronological history of decisions. | `get_timeline(limit=10)` |
-| `get_lessons` | Retrieves aggregated lessons learned. | `get_lessons(tags=["security"])` |
-| `get_statistics` | Memory database statistics. | `get_statistics(project_name="my-app")` |
-| `onboard_project` | Analyzes a new project and generates initial context. | `onboard_project(path=".")` |
-| `mark_episode` | Marks an episode as Anti-pattern or Critical. | `mark_episode(id="...", is_antipattern=true)` |
-| `consolidate_memories` | Forces creation of Meta-Memories. | `consolidate_memories(project_name="my-app")` |
-| `check_consolidation_status` | Checks pending consolidation status. | `check_consolidation_status()` |
-
----
-
-## Real-World Usage Examples
-
-### Case 1: Avoiding Repeated Mistakes (Anti-patterns)
-
-**Situation**: You're about to implement a caching system.
-**Action**: Copilot queries Memory Twin.
-
-```json
-{
-  "topic": "cache redis",
-  "include_reasoning": true
-}
-```
-
-**System Response**:
-> "**WARNING**: An anti-pattern was detected in episode `e4f2`.
-> **Lesson**: Do not use `pickle` to serialize data in Redis when multiple Python services with different versions exist. This caused deserialization errors in production.
-> **Recommendation**: Use JSON or MsgPack."
-
-### Case 2: Onboarding onto a Legacy Project
-
-**Situation**: You join a project with 5 years of history.
-**Command**: `mt query "What is this project's architecture and why?"`
-
-**Response**:
-> "The project follows a Hexagonal Architecture (Ports & Adapters).
-> According to Meta-Memory #3 (consolidated from 15 episodes):
-> 1. It was chosen to decouple business logic from the Django framework.
-> 2. Database adapters are in `src/infra`.
-> 3. **Exception**: The reporting module violates this rule for performance reasons (Episode #89)."
-
----
-
-## Verification and Defensible Claims
-
-The following claims are intentionally limited to what can be demonstrated directly from this repository and runtime setup:
-
-- **Automated quality gates**: CI runs lint + tests on Python 3.11/3.12 ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
-- **Automated tests**: full test suite passes locally (`pytest`) and covers core modules (MCP server, storage, RAG engine, processor, scoring).
-- **Public observability evidence**: one real public Langfuse trace is available in the section above.
-- **Runnable architecture**: the project provides a CLI (`mt`), MCP server, local storage (SQLite + ChromaDB), and optional UI.
-
-### Quick Verification Commands
+Or work from the terminal:
 
 ```bash
-# Run all tests
-pytest -q
-
-# Run lint checks
-ruff check src/ tests/
+mt capture "Chose FastAPI over Flask for native async support" -p my-api
+mt query "Why did we choose FastAPI?" -p my-api
+mt chat -p my-api          # interactive session with the Oráculo
+mt oraculo                 # web UI at http://127.0.0.1:7860
 ```
-
-> **Portfolio note**: this project is presented as an engineering showcase (architecture + implementation quality), not as externally audited product KPI evidence.
 
 ---
 
-## System Architecture
+## CLI Reference
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      Memory Twin                            │
-├────────────────────────┬────────────────────────────────────┤
-│     ESCRIBA            │           ORACLE                   │
-│   (Backend/Ingestion)  │       (Frontend/Query)             │
-├────────────────────────┼────────────────────────────────────┤
-│ • Captures thinking    │ • Contextual Q&A (RAG)             │
-│ • Processes with LLM   │ • Decision Timeline                │
-│ • Generates embeddings │ • Lessons Learned                  │
-│ • Stores episodes      │ • Gradio Interface                 │
-├────────────────────────┴────────────────────────────────────┤
-│                     MCP Server                              │
-│            (Model Context Protocol)                         │
-├─────────────────────────────────────────────────────────────┤
-│                 Storage Backend (Strategy)                  │
-│      ┌─────────────────────────┬──────────────────────┐     │
-│      │         Local           │       Server         │     │
-│      │ (SQLite + ChromaDir)    │ (ChromaDB Server)    │     │
-│      └─────────────────────────┴──────────────────────┘     │
-├─────────────────────────────────────────────────────────────┤
-│                Langfuse (Observability)                     │
-└─────────────────────────────────────────────────────────────┘
-```
+| Command | Description |
+|---------|-------------|
+| `mt setup [path] [--force]` | Configure Memory Twin in a project (AGENTS.md, MCP config, `.env`) |
+| `mt onboard [path] [-v]` | Analyze an existing codebase (stack, patterns, dependencies, conventions) and store it as the first memory |
+| `mt capture [text] [-f file] [-p project]` | Capture reasoning from an argument, a file or stdin |
+| `mt search <query> [-k N]` | Semantic search over episodes |
+| `mt query <question>` | RAG answer grounded on the memories |
+| `mt chat` | Interactive Q&A session in the terminal |
+| `mt lessons` | Aggregated lessons learned |
+| `mt stats` | Episodes by type and assistant |
+| `mt consolidate -p project [--force]` | Cluster episodes into meta-memories |
+| `mt health-check` | Verify SQLite and ChromaDB are in sync |
+| `mt mcp` | Start the MCP server (stdio) |
+| `mt oraculo` | Launch the web UI (requires the `ui` extra) |
 
-## Scalability and Resilience
+Memory commands accept `-p/--project` to scope the operation to one project.
 
-- **Database**: SQLite (fast, serverless) for metadata + ChromaDB for vectors. Easily scales to thousands of episodes.
-- **Error Handling**: If the LLM API fails, the system still allows keyword searches and timeline access.
-- **Offline Mode**: Timeline and history queries work without internet (once data is cached).
+## MCP Tools
+
+| Tool | Purpose |
+|------|---------|
+| `get_project_context` | **Entry point.** Warnings, meta-memories and relevant episodes for a topic |
+| `capture_thinking` | Store free-form reasoning (structured by the LLM) |
+| `capture_decision` | Store a decision from `task`, `decision`, `reasoning`, `alternatives`, `lesson` |
+| `capture_quick` | Minimal capture: `what` + `why` |
+| `query_memory` | RAG answer to a question |
+| `search_episodes` | Semantic search |
+| `get_episode` | Full content of one episode |
+| `get_timeline` | Chronological history |
+| `get_lessons` | Aggregated lessons, filterable by tags |
+| `get_statistics` | Memory statistics |
+| `onboard_project` | Analyze a codebase and create the initial context |
+| `mark_episode` | Flag as anti-pattern / critical, or mark as superseded |
+| `consolidate_memories` | Generate meta-memories for a project |
+| `check_consolidation_status` | Whether consolidation is recommended |
+
+The server speaks JSON-RPC over stdio, so all logs and progress output go to stderr.
+
+---
+
+## Configuration
+
+All settings are read from environment variables or a `.env` file in the working directory
+(see [`.env.example`](.env.example)).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLM_PROVIDER` | `openrouter` | `openrouter` or `google` |
+| `LLM_MODEL` | `openrouter/auto` | Model used for structuring and answers |
+| `OPENROUTER_API_KEY` / `GOOGLE_API_KEY` | | Key for the selected provider |
+| `LLM_TEMPERATURE` | `0.3` | Temperature used to structure captures |
+| `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Local sentence-transformers model |
+| `CHROMA_PERSIST_DIR` | `./data/chroma` | Vector store location |
+| `SQLITE_DB_PATH` | `./data/memory.db` | Metadata database location |
+| `GRADIO_SERVER_NAME` | `127.0.0.1` | Web UI bind address (localhost: the UI can delete episodes) |
+| `GRADIO_SERVER_PORT` | `7860` | Web UI port |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST` | | Enable tracing (optional) |
+
+Memories are stored **locally, per project**, in `data/` next to where `mt` runs. Nothing leaves
+your machine except the text sent to the LLM provider you configure.
+
+## Observability
+
+With Langfuse credentials configured, every capture, retrieval and consolidation is traced
+(LLM input/output, model parameters, number of episodes and meta-memories used). Tracing is a
+no-op when the package or the credentials are missing.
+
+- **Example trace from a real run**: [public Langfuse trace](https://cloud.langfuse.com/project/cmiq9jkds005rad065xzlt8p8/traces/650709800524916eb6c18deffdc35fa4?timestamp=2025-12-10T01:41:30.876Z)
 
 ---
 
 ## Development
 
 ```bash
-# Clone and install in development mode
 git clone https://github.com/JesusJimenez01/memorytwin.git
 cd memorytwin
+python -m venv .venv && source .venv/bin/activate   # .venv\Scripts\activate on Windows
 pip install -e ".[dev,ui]"
+pre-commit install                                  # optional: lint on every commit
 
-# Run tests
-pytest
-
-# Lint
-ruff check src/ tests/
+pytest                      # 170+ tests, LLM calls are mocked
+pytest --cov                # coverage report (CI enforces >= 70%)
+ruff check src/ tests/      # lint
 ```
+
+### Project structure
+
+```text
+src/memorytwin/
+├── config.py              # Settings + provider-agnostic LLM clients (OpenRouter, Gemini)
+├── models.py              # Pydantic models: Episode, MetaMemory, queries and results
+├── scoring.py             # Hybrid relevance scoring and consolidation triggers
+├── consolidation.py       # DBSCAN clustering + LLM synthesis of meta-memories
+├── observability.py       # Optional Langfuse tracing
+├── escriba/               # Ingestion
+│   ├── processor.py       #   LLM structuring with retries and tolerant JSON parsing
+│   ├── storage.py         #   ChromaDB + SQLite dual storage
+│   ├── project_analyzer.py #  Codebase onboarding analysis
+│   └── cli.py             #   `mt` command-line interface
+├── oraculo/               # Retrieval
+│   ├── rag_engine.py      #   RAG over meta-memories and episodes, with LLM fallback
+│   ├── oraculo.py         #   Interactive terminal session
+│   └── app.py             #   Gradio web UI
+├── mcp_server/
+│   ├── server.py          # MCP server (stdio) and tool handlers
+│   └── tools.py           # Tool JSON schemas
+└── templates/             # Files generated by `mt setup`
+```
+
+### Design decisions and trade-offs
+
+| Decision | Why | Trade-off |
+|----------|-----|-----------|
+| Local embeddings (MiniLM) instead of an embeddings API | Zero cost, offline, private, fast on CPU | Lower quality than large embedding models |
+| ChromaDB + SQLite instead of a single store | Vector search where it shines, relational queries and counters where they belong | Two stores to keep in sync (`mt health-check`) |
+| DBSCAN for consolidation | No preset number of clusters; outliers stay as individual memories | `eps` needs tuning for other embedding models |
+| Reinforcement without time decay | Old but still-useful decisions keep their relevance | Obsolete knowledge must be marked explicitly (`mark_episode`) |
+| LLM structuring at capture time | Rich, queryable episodes (alternatives, lessons, tags) | Latency and cost per capture; mitigated with free models and a raw fallback |
+
+---
+
+## Author
+
+Designed and built by **Jesús Jiménez Pérez** · [GitHub](https://github.com/JesusJimenez01)
 
 ## License
 

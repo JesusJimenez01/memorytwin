@@ -1,309 +1,329 @@
-# Memory Twin - Instrucciones para Agentes IA
+# Memory Twin - Instructions for AI Agents
 
 ---
-## 🚨 REGLA OBLIGATORIA - LEER PRIMERO 🚨
+## 🚨 MANDATORY RULE - READ FIRST 🚨
 
-**ANTES de responder CUALQUIER pregunta técnica, DEBO ejecutar:**
+**BEFORE answering ANY technical question, I MUST run:**
 
 ```
-get_project_context(topic="<términos relevantes de la pregunta del usuario>")
+get_project_context(topic="<relevant terms from the user's question>")
 ```
 
-**NO HAY EXCEPCIONES.** Si no consulto la memoria primero, puedo:
-- Sugerir soluciones que ya fallaron
-- Ignorar decisiones de arquitectura previas
-- Repetir errores que ya resolvimos
-- Contradecir el estilo/convenciones del proyecto
+**NO EXCEPTIONS.** If I don't check memory first, I may:
+- Suggest solutions that already failed
+- Ignore previous architecture decisions
+- Repeat errors we already solved
+- Contradict the project's style/conventions
 
-**Mi primera acción SIEMPRE es obtener contexto del proyecto. SIEMPRE.**
+**My first action is ALWAYS to get project context. ALWAYS.**
 
-## 🛠️ Disponibilidad de Herramientas
-Estas instrucciones asumen que el servidor MCP de MemoryTwin está activo.
-- Si la herramienta `get_project_context` falla o no está disponible:
-1. NOTIFÍCAME inmediatamente: "⚠️ No puedo acceder a mi memoria. Verifica el servidor MCP."
-2. Pídeme que te pegue el contexto manualmente si es crítico.
+## 🛠️ Tool Availability
+These instructions assume the MemoryTwin MCP server is active.
+- If the `get_project_context` tool fails or is not available:
+1. NOTIFY ME immediately: "⚠️ I cannot access my memory. Check the MCP server."
+2. Ask me to paste the context manually if it's critical.
 
 ---
 
-## ¿Qué es Memory Twin?
-Sistema de memoria episódica que captura el razonamiento técnico para evitar "amnesia técnica" en proyectos.
+## What is Memory Twin?
+Episodic memory system that captures technical reasoning to prevent "technical amnesia" in projects.
 
-## ⚡ PROTOCOLO DE CONSULTA OBLIGATORIO
+## ⚡ MANDATORY QUERY PROTOCOL
 
-### PASO 1: Obtener contexto (OBLIGATORIO)
-Antes de escribir CUALQUIER respuesta técnica:
+### STEP 1: Get context (MANDATORY)
+Before writing ANY technical response:
 
 ```
-get_project_context(topic="<palabras clave de la pregunta>")
+get_project_context(topic="<keywords from the question>")
 ```
 
-Esta herramienta es INTELIGENTE:
-- Si hay **pocas memorias (<20)**: devuelve TODO el contexto del proyecto
-- Si hay **muchas memorias (>=20)**: devuelve estadísticas + recientes + relevantes al topic
+This tool is SMART:
+- If there are **few memories (<20)**: returns ALL project context
+- If there are **many memories (>=20)**: returns statistics + recent + relevant to the topic
 
-**Nota Importante:**
-Esta herramienta activa el mecanismo de **"Forgetting Curve"**. Al consultar memorias relevantes, incrementas su `access_count`, evitando que el sistema las "olvide" con el tiempo. ¡Consultar es reforzar!
+**Important Note:**
+This tool activates the **"Forgetting Curve"** mechanism. By querying relevant memories, you increase their `access_count`, preventing the system from "forgetting" them over time. Querying is reinforcing!
 
-Ejemplos de consultas:
-- Usuario pregunta sobre autenticación → `get_project_context(topic="autenticación login JWT")`
-- Usuario tiene un error → `get_project_context(topic="error <tipo de error>")`
-- Usuario quiere implementar feature → `get_project_context(topic="<nombre feature>")`
-- Usuario pregunta arquitectura → `get_project_context(topic="arquitectura diseño")`
+Query examples:
+- User asks about authentication → `get_project_context(topic="authentication login JWT")`
+- User has an error → `get_project_context(topic="error <error type>")`
+- User wants to implement a feature → `get_project_context(topic="<feature name>")`
+- User asks about architecture → `get_project_context(topic="architecture design")`
 
-### PASO 2: Analizar resultados
-- Si hay memorias relevantes → Incorporar ese conocimiento
-- Si no hay resultados → Proceder normalmente, pero considerar capturar después
+### STEP 2: Analyze results
+- If there are relevant memories → Incorporate that knowledge
+- If no results → Proceed normally, but consider capturing afterwards
 
-### PASO 3: Responder mencionando contexto
-- "Según memorias previas del proyecto..."
-- "No encontré decisiones previas sobre esto, procedo con..."
-- "Esto ya se resolvió anteriormente, la solución fue..."
+### STEP 3: Respond mentioning context
+- "According to previous project memories..."
+- "I found no previous decisions about this, proceeding with..."
+- "This was already solved before, the solution was..."
 
-### Cuándo consultar (SIEMPRE que aplique):
-| Situación | Consulta obligatoria |
+### When to query (ALWAYS when applicable):
+| Situation | Mandatory query |
 |-----------|---------------------|
-| Pregunta técnica | `get_project_context(topic="<tema>")` |
-| Error/Bug | `get_project_context(topic="error <descripción>")` |
-| Nueva feature | `get_project_context(topic="<feature>")` + `get_lessons()` |
-| Decisión de arquitectura | `query_memory("<pregunta>")` |
-| Primera vez en proyecto | `onboard_project("<ruta>")` |
-| Elegir librería/enfoque | `get_project_context(topic="<opciones>")` |
+| Technical question | `get_project_context(topic="<topic>")` |
+| Error/Bug | `get_project_context(topic="error <description>")` |
+| New feature | `get_project_context(topic="<feature>")` + `get_lessons()` |
+| Architecture decision | `query_memory("<question>")` |
+| First time in project | `onboard_project("<path>")` |
+| Choose library/approach | `get_project_context(topic="<options>")` |
 
-## Herramientas MCP Disponibles
+## Available MCP Tools
 
-### `get_project_context` - ⭐ HERRAMIENTA PRINCIPAL
-**Usar SIEMPRE antes de cualquier respuesta técnica.**
+### `get_project_context` - ⭐ MAIN TOOL
+**ALWAYS use before any technical response.**
 
-Comportamiento inteligente:
-- **Pocas memorias (<20)**: Devuelve TODO el contexto completo
-- **Muchas memorias (>=20)**: Devuelve estadísticas + 5 recientes + 5 relevantes al topic
+Smart behavior:
+- **Few memories (<20)**: Returns ALL complete context
+- **Many memories (>=20)**: Returns statistics + 5 recent + 5 relevant to the topic
 
-**Nota Importante:**
-Esta herramienta activa el mecanismo de **"Forgetting Curve"**. Al consultar memorias relevantes, incrementas su `access_count`, evitando que el sistema las "olvide" con el tiempo. ¡Consultar es reforzar!
+**Important Note:**
+This tool activates the **"Forgetting Curve"** mechanism. By querying relevant memories, you increase their `access_count`, preventing the system from "forgetting" them over time. Querying is reinforcing!
 
-Parámetros:
-- `topic` (opcional): Tema para búsqueda semántica
-- `project_name` (opcional): Filtrar por proyecto
+Parameters:
+- `topic` (optional): Topic for semantic search
+- `project_name` (optional): Filter by project
 
-### `capture_thinking` - 🔴 CAPTURA OBLIGATORIA
-**DEBO usar esta herramienta AUTOMÁTICAMENTE después de cualquier tarea técnica.**
+### `capture_thinking` - 🔴 MANDATORY CAPTURE
+**I MUST use this tool AUTOMATICALLY after any technical task.**
 
-**IMPORTANTE:** Esta es la **ÚNICA** forma de persistir conocimiento. Si no la uso, el trabajo se pierde.
+**IMPORTANT:** This is the **ONLY** way to persist knowledge. If I don't use it, the work is lost.
 
-**💡 TIP:** Hay 3 formas de capturar, elige la más conveniente:
-1. `capture_quick` - ⚡ La más rápida (solo what + why)
-2. `capture_decision` - 🎯 Para decisiones (task + decision + reasoning)
-3. `capture_thinking` - 📝 Para texto libre extenso
+**💡 TIP:** There are 3 ways to capture, choose the most convenient:
+1. `capture_quick` - ⚡ The fastest (only what + why)
+2. `capture_decision` - 🎯 For decisions (task + decision + reasoning)
+3. `capture_thinking` - 📝 For extensive free text
 
-#### ✅ CAPTURAR SIEMPRE (sin excepción):
-- Resolví un bug o error (cualquiera, no importa si es "simple")
-- Tomé una decisión técnica (librería, patrón, enfoque)
-- Comparé alternativas antes de elegir
-- Descubrí algo inesperado (gotcha, edge case, comportamiento raro)
-- Modifiqué código existente (refactor, mejora, fix)
-- Implementé una feature nueva
-- Configuré algo (entorno, herramientas, dependencias)
-- Investigué documentación o código para entender algo
-- El usuario me pidió hacer algo y lo completé
-- Encontré un problema en documentación/código y lo corregí
+#### ✅ ALWAYS CAPTURE (no exceptions):
+- Fixed a bug or error (any, no matter if it's "simple")
+- Made a technical decision (library, pattern, approach)
+- Compared alternatives before choosing
+- Discovered something unexpected (gotcha, edge case, weird behavior)
+- Modified existing code (refactor, improvement, fix)
+- Implemented a new feature
+- Configured something (environment, tools, dependencies)
+- Researched documentation or code to understand something
+- The user asked me to do something and I completed it
+- Found a problem in documentation/code and corrected it
 
-#### ❌ NO capturar SOLO cuando:
-- Respuesta puramente informativa sin acción (ej: "¿qué hora es?")
-- Conversación casual sin contenido técnico
-- El usuario explícitamente dice "no guardes esto"
+#### ❌ Do NOT capture ONLY when:
+- Purely informational response without action (e.g., "what time is it?")
+- Casual conversation without technical content
+- The user explicitly says "don't save this"
 
-#### 🎯 REGLA DE ORO: Ante la duda, CAPTURAR
-Es mejor tener una memoria "de más" que perder conocimiento valioso.
+#### 🎯 GOLDEN RULE: When in doubt, CAPTURE
+It's better to have an "extra" memory than to lose valuable knowledge.
 
-Parámetros:
-- `thinking_text` (requerido): Texto de razonamiento del modelo
-- `user_prompt` (opcional): Prompt original del usuario
-- `code_changes` (opcional): Cambios de código asociados
-- `source_assistant` (opcional): copilot, claude, cursor, etc.
-- `project_name` (opcional): Nombre del proyecto
+Parameters:
+- `thinking_text` (required): Model reasoning text
+- `user_prompt` (optional): Original user prompt
+- `code_changes` (optional): Associated code changes
+- `source_assistant` (optional): copilot, claude, cursor, etc.
+- `project_name` (optional): Project name
 
-### `capture_decision` - 🎯 CAPTURA ESTRUCTURADA (PREFERIDA)
-**Forma más conveniente de capturar decisiones técnicas.**
+### `capture_decision` - 🎯 STRUCTURED CAPTURE (PREFERRED)
+**Most convenient way to capture technical decisions.**
 
-Usar cuando tengas los datos organizados en campos separados. Más cómodo que escribir texto libre.
+Use when you have data organized in separate fields. More convenient than writing free text.
 
-Parámetros:
-- `task` (requerido): Descripción breve de la tarea o problema
-- `decision` (requerido): La decisión o solución tomada
-- `reasoning` (requerido): Por qué se tomó esta decisión
-- `alternatives` (opcional): Array de alternativas consideradas
-- `lesson` (opcional): Lección aprendida para el futuro
-- `context` (opcional): Contexto adicional
-- `project_name` (opcional): Nombre del proyecto
+Parameters:
+- `task` (required): Brief description of the task or problem
+- `decision` (required): The decision or solution taken
+- `reasoning` (required): Why this decision was made
+- `alternatives` (optional): Array of alternatives considered
+- `lesson` (optional): Lesson learned for the future
+- `context` (optional): Additional context
+- `project_name` (optional): Project name
 
-**Ejemplo:**
+**Example:**
 ```
 capture_decision(
-    task="Elegir base de datos",
+    task="Choose database",
     decision="PostgreSQL",
     alternatives=["MongoDB", "MySQL"],
-    reasoning="Necesitamos ACID y queries complejas",
-    lesson="Para datos relacionales con transacciones, SQL > NoSQL"
+    reasoning="We need ACID and complex queries",
+    lesson="For relational data with transactions, SQL > NoSQL"
 )
 ```
 
-### `capture_quick` - ⚡ CAPTURA RÁPIDA (MÍNIMO ESFUERZO)
-**La forma más simple de capturar. Solo 2 campos requeridos.**
+### `capture_quick` - ⚡ QUICK CAPTURE (MINIMUM EFFORT)
+**The simplest way to capture. Only 2 required fields.**
 
-Usar para capturas rápidas sin mucho detalle. Ideal cuando tienes prisa.
+Use for quick captures without much detail. Ideal when you're in a hurry.
 
-Parámetros:
-- `what` (requerido): ¿Qué hiciste? (acción realizada)
-- `why` (requerido): ¿Por qué lo hiciste? (razón)
-- `lesson` (opcional pero recomendado): Lección aprendida
-- `project_name` (opcional): Nombre del proyecto
+Parameters:
+- `what` (required): What did you do? (action performed)
+- `why` (required): Why did you do it? (reason)
+- `lesson` (optional but recommended): Lesson learned
+- `project_name` (optional): Project name
 
-**Ejemplos:**
+**Examples:**
 ```
 capture_quick(
-    what="Añadí retry logic al cliente HTTP",
-    why="Las llamadas a la API fallaban intermitentemente"
+    what="Added retry logic to HTTP client",
+    why="API calls were failing intermittently"
 )
 
 capture_quick(
-    what="Cambié de axios a fetch",
-    why="Reducir dependencias, fetch nativo es suficiente",
-    lesson="Evaluar siempre si una dependencia es realmente necesaria"
+    what="Switched from axios to fetch",
+    why="Reduce dependencies, native fetch is sufficient",
+    lesson="Always evaluate if a dependency is really necessary"
 )
 ```
 
-### `query_memory` - Consultar memorias con RAG
-Usar cuando:
-- El usuario pregunta "¿por qué hicimos X?"
-- El usuario pregunta "¿cómo resolvimos algo similar?"
-- Antes de tomar una decisión importante (consultar precedentes)
+### `query_memory` - Query memories with RAG
+Use when:
+- The user asks "why did we do X?"
+- The user asks "how did we solve something similar?"
+- Before making an important decision (check precedents)
 
-Parámetros:
-- `question` (requerido): Pregunta a responder
-- `project_name` (opcional): Filtrar por proyecto
-- `num_episodes` (opcional): Número de episodios a consultar (1-10, default: 5)
+Parameters:
+- `question` (required): Question to answer
+- `project_name` (optional): Filter by project
+- `num_episodes` (optional): Number of episodes to query (1-10, default: 5)
 
-### `search_episodes` - Búsqueda semántica de episodios
-Usar para búsquedas específicas de temas o tecnologías.
-Devuelve los episodios más relevantes para un término de búsqueda.
-*Nota: Los resultados consultados reciben un boost de relevancia para el futuro.*
+### `search_episodes` - Semantic episode search
+Use for specific searches on topics or technologies.
+Returns the most relevant episodes for a search term.
+*Note: Queried results receive a relevance boost for the future.*
 
-Parámetros:
-- `query` (requerido): Término de búsqueda
-- `project_name` (opcional): Filtrar por proyecto
-- `top_k` (opcional): Número de resultados (default: 5)
+Parameters:
+- `query` (required): Search term
+- `project_name` (optional): Filter by project
+- `top_k` (optional): Number of results (default: 5)
 
-### `get_episode` - Obtener episodio completo
-Usar cuando necesitas profundizar en los detalles de una decisión específica.
-Devuelve el contenido COMPLETO: thinking, alternativas, factores de decisión, contexto y lecciones.
+### `get_episode` - Get complete episode
+Use when you need to dive into the details of a specific decision.
+Returns the COMPLETE content: thinking, alternatives, decision factors, context and lessons.
 
-Parámetros:
-- `episode_id` (requerido): UUID del episodio a recuperar
+Parameters:
+- `episode_id` (required): UUID of the episode to retrieve
 
-### `get_lessons` - Lecciones aprendidas
-Usar para:
-- Onboarding de nuevos miembros
-- Revisión antes de empezar feature similar
-- El usuario pide "¿qué hemos aprendido sobre X?"
+### `get_lessons` - Lessons learned
+Use for:
+- Onboarding new members
+- Review before starting a similar feature
+- The user asks "what have we learned about X?"
 
-Parámetros:
-- `project_name` (opcional): Filtrar por proyecto
-- `tags` (opcional): Array de tags para filtrar
+Parameters:
+- `project_name` (optional): Filter by project
+- `tags` (optional): Array of tags to filter
 
-### `get_timeline` - Ver historial cronológico
-Usar para ver evolución cronológica del proyecto y entender qué se hizo cuándo.
+### `get_timeline` - View chronological history
+Use to see chronological evolution of the project and understand what was done when.
 
-Parámetros:
-- `project_name` (opcional): Filtrar por proyecto
-- `limit` (opcional): Máximo de episodios a retornar (default: 20)
+Parameters:
+- `project_name` (optional): Filter by project
+- `limit` (optional): Maximum episodes to return (default: 20)
 
-### `get_statistics` - Estadísticas de la memoria
-Obtiene estadísticas de la base de memoria: total de episodios, distribución por tipo y asistente.
+### `get_statistics` - Memory statistics
+Gets memory database statistics: total episodes, distribution by type and assistant.
 
-Parámetros:
-- `project_name` (opcional): Filtrar por proyecto
+Parameters:
+- `project_name` (optional): Filter by project
 
-### `onboard_project` - Onboarding de proyecto existente
-Usar cuando:
-- ✅ Es la primera vez que trabajo en este proyecto
-- ✅ El usuario pide "analiza el proyecto", "conoce el código"
-- ✅ Necesito entender la estructura antes de hacer cambios grandes
-- ✅ No hay memorias previas y quiero crear contexto inicial
+### `onboard_project` - Onboard existing project
+Use when:
+- ✅ It's the first time I work on this project
+- ✅ The user asks "analyze the project", "learn the code"
+- ✅ I need to understand the structure before making big changes
+- ✅ There are no previous memories and I want to create initial context
 
-Genera automáticamente un episodio con:
-- Stack tecnológico detectado
-- Patrones arquitectónicos
-- Dependencias principales
-- Convenciones de código
+Automatically generates an episode with:
+- Detected technology stack
+- Architectural patterns
+- Main dependencies
+- Code conventions
 
-Parámetros:
-- `project_path` (requerido): Ruta absoluta al proyecto
-- `project_name` (opcional): Nombre del proyecto (se detecta automáticamente)
+Parameters:
+- `project_path` (required): Absolute path to the project
+- `project_name` (optional): Project name (auto-detected)
 
-## Flujo de Trabajo OBLIGATORIO
+### `mark_episode` - Curate memory
+Use when:
+- A previous solution turned out to be wrong → `is_antipattern=true` (it will appear as a WARNING)
+- A decision is essential for the project → `is_critical=true` (ranked higher in searches)
+- A newer episode replaces an old one → `superseded_by="<episode UUID>"`
 
-### 🔄 CICLO COMPLETO (SIEMPRE):
+Parameters:
+- `episode_id` (required): UUID of the episode to mark
+- `is_antipattern`, `is_critical` (optional): Boolean flags
+- `superseded_by`, `deprecation_reason` (optional): Replacement episode and reason
+
+### `consolidate_memories` / `check_consolidation_status` - Meta-memories
+Groups similar episodes (DBSCAN over embeddings) and asks the LLM to synthesize
+patterns, lessons and anti-patterns. Run it when `get_project_context` recommends it.
+
+Parameters:
+- `project_name` (required for `consolidate_memories`): Project to consolidate
+- `min_cluster_size` (optional): Minimum episodes per cluster (default: 3)
+- `force` (optional): Re-consolidate episodes already covered by a meta-memory
+
+## MANDATORY Workflow
+
+### 🔄 COMPLETE CYCLE (ALWAYS):
 ```
-1. INICIO: get_project_context(topic="...") 
-2. TRABAJO: Realizar la tarea solicitada
-3. FIN: capture_thinking(thinking_text="...") 
-```
-
-### Checklist antes de terminar respuesta:
-- [ ] ¿Consulté la memoria al inicio? Si no → HACERLO AHORA
-- [ ] ¿Hice algo técnico? Si sí → CAPTURAR MEMORIA
-- [ ] ¿Resolví un problema? Si sí → CAPTURAR MEMORIA  
-- [ ] ¿Tomé una decisión? Si sí → CAPTURAR MEMORIA
-- [ ] ¿Modifiqué código? Si sí → CAPTURAR MEMORIA
-- [ ] ¿Investigué algo? Si sí → CAPTURAR MEMORIA
-
-### ⚠️ RECORDATORIO CRÍTICO:
-**NO terminar una respuesta técnica sin haber ejecutado `capture_thinking`.**
-El conocimiento que no se captura, SE PIERDE PARA SIEMPRE.
-
-## Formato del Thinking a Capturar
-
-Incluir siempre que sea posible:
-- **Tarea**: Qué se intentaba resolver
-- **Contexto**: Estado inicial, restricciones
-- **Alternativas**: Opciones consideradas
-- **Decisión**: Qué se eligió y por qué
-- **Solución**: Cómo se implementó
-- **Lecciones**: Qué aprendimos
-
-## Ejemplo de Captura Automática
-
-```
-Cuando detecto que acabo de:
-1. Debuggear un error por más de 2 intercambios
-2. Comparar 2+ opciones antes de elegir
-3. Descubrir un comportamiento inesperado
-4. Implementar algo que requirió investigación
-
-→ Llamar a capture_thinking con el contexto completo
+1. START: get_project_context(topic="...")
+2. WORK: Perform the requested task
+3. END: capture_thinking(thinking_text="...")
 ```
 
-## 🚨 EJEMPLO DE FLUJO CORRECTO
+### Checklist before finishing response:
+- [ ] Did I check memory at the start? If not → DO IT NOW
+- [ ] Did I do something technical? If yes → CAPTURE MEMORY
+- [ ] Did I solve a problem? If yes → CAPTURE MEMORY
+- [ ] Did I make a decision? If yes → CAPTURE MEMORY
+- [ ] Did I modify code? If yes → CAPTURE MEMORY
+- [ ] Did I research something? If yes → CAPTURE MEMORY
 
-### Usuario pregunta: "¿Por qué falla mi función de login?"
+### ⚠️ CRITICAL REMINDER:
+**Do NOT finish a technical response without having run `capture_thinking`.**
+Knowledge that is not captured is LOST FOREVER.
+
+## Thinking Format to Capture
+
+Always include when possible:
+- **Task**: What was being solved
+- **Context**: Initial state, constraints
+- **Alternatives**: Options considered
+- **Decision**: What was chosen and why
+- **Solution**: How it was implemented
+- **Lessons**: What we learned
+
+## Automatic Capture Example
 
 ```
-# 1. PRIMERO: Consultar memoria
-get_project_context(topic="login autenticación error")
+When I detect that I just:
+1. Debugged an error for more than 2 exchanges
+2. Compared 2+ options before choosing
+3. Discovered unexpected behavior
+4. Implemented something that required research
 
-# 2. DESPUÉS: Trabajar en la solución
-[Analizar código, debuggear, encontrar el problema, proponer fix]
+→ Call capture_thinking with the full context
+```
 
-# 3. FINALMENTE: Capturar el conocimiento
+## 🚨 CORRECT FLOW EXAMPLE
+
+### User asks: "Why is my login function failing?"
+
+```
+# 1. FIRST: Query memory
+get_project_context(topic="login authentication error")
+
+# 2. THEN: Work on the solution
+[Analyze code, debug, find the problem, propose fix]
+
+# 3. FINALLY: Capture the knowledge
 capture_thinking(
-    thinking_text="## Tarea\nResolver error en función login...\n## Problema\nEl token JWT...\n## Solución\n...\n## Lecciones\n...",
-    project_name="mi-proyecto",
+    thinking_text="## Task\nResolve login function error...\n## Problem\nThe JWT token...\n## Solution\n...\n## Lessons\n...",
+    project_name="my-project",
     source_assistant="copilot"
 )
 ```
 
-**SI NO CAPTURO AL FINAL, ESTOY FALLANDO MI FUNCIÓN.**
+**IF I DON'T CAPTURE AT THE END, I'M FAILING MY PURPOSE.**
 
-## Proyecto Actual
-- **Nombre del proyecto**: Usar el nombre de la carpeta del workspace
-- **Source assistant**: "copilot" para GitHub Copilot
+## Current Project
+- **Project name**: Use the workspace folder name
+- **Source assistant**: "copilot" for GitHub Copilot
